@@ -1,0 +1,41 @@
+{
+  "name": "thoughts",
+  "version": "0.1.0",
+  "description": "Attach a shared, git-backed brain to every repo in a multi-repo project.",
+  "private": true,
+  "type": "module",
+  "license": "UNLICENSED",
+  "bin": {
+    "thoughts": "./dist/index.js"
+  },
+  "files": [
+    "dist",
+    "templates",
+    "kit"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "os": [
+    "darwin",
+    "linux"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json && chmod +x dist/index.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "tsc -p tsconfig.json --noEmit",
+    "check": "npm run typecheck && npm test"
+  },
+  "dependencies": {
+    "commander": "^14.0.0",
+    "handlebars": "^4.7.8",
+    "yaml": "^2.8.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "typescript": "^5.8.0",
+    "vitest": "^3.2.0"
+  }
+}
