@@ -1,5 +1,5 @@
 /**
- * commander program. Owned by the "commands" package after scaffold.
+ * commander program. Owned by the "commands" package.
  *
  * Responsibilities (see the contract):
  *  - register every command from src/commands/*
@@ -8,7 +8,13 @@
  */
 import { Command } from 'commander';
 import { cliVersion } from './assets.js';
+import { SecretRefusedError } from './commands/common.js';
+import * as initCommand from './commands/init.js';
+import * as newCommand from './commands/new.js';
+import * as scanCommand from './commands/scan.js';
+import * as syncCommand from './commands/sync.js';
 import * as out from './output.js';
+import { formatFindings } from './security/format.js';
 import { ExitCode, SecretFoundError, ThoughtsError } from './types.js';
 
 export function buildProgram(): Command {
@@ -18,7 +24,10 @@ export function buildProgram(): Command {
     .description('Attach a shared, git-backed brain to every repo in a multi-repo project.')
     .version(cliVersion(), '-v, --version')
     .showHelpAfterError();
-  // TODO(commands package): register init / sync / new here.
+  initCommand.register(program);
+  syncCommand.register(program);
+  newCommand.register(program);
+  scanCommand.register(program);
   return program;
 }
 
@@ -41,12 +50,12 @@ export function handleError(err: unknown): number {
     return e.exitCode === 0 ? ExitCode.Ok : ExitCode.Validation;
   }
   if (err instanceof SecretFoundError) {
-    // Findings are already masked by the scanner; formatting lives in src/security.
-    out.error(err.message);
-    for (const f of err.findings) {
-      out.print(`  ${f.path}:${f.line}\n    ${f.kind.padEnd(22)} ${f.masked}`);
+    // Findings are already masked by the scanner; the human form is specs/15 "Output".
+    const silent = err instanceof SecretRefusedError && err.silent;
+    if (!silent) {
+      const verb = err instanceof SecretRefusedError ? err.verb : 'commit';
+      process.stderr.write(formatFindings(err.findings, { verb }) + '\n');
     }
-    if (err.hint) out.print('\n' + err.hint);
     return err.exitCode;
   }
   if (err instanceof ThoughtsError) {

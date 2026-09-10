@@ -158,7 +158,11 @@ describe('preflight: brain and none modes', () => {
     const elsewhere = path.join(env.root, 'elsewhere');
     await fs.promises.mkdir(elsewhere);
     const bare = await preflight(elsewhere, { command: 'new' });
-    expect(bare).toMatchObject({ mode: 'none', brainRoot: undefined, warnings: [] });
+    expect(bare.mode).toBe('none');
+    expect(bare.brainRoot).toBeUndefined();
+    expect(bare.brainId).toBeUndefined();
+    expect(bare.brainConfig).toBeUndefined();
+    expect(bare.warnings).toEqual([]);
 
     const missing = await preflight(elsewhere, { command: 'new', brain: 'nope' });
     expect(missing.mode).toBe('none');

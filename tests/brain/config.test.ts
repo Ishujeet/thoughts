@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   brainIdFromRemote,
   defaultUserId,
+  isValidRepoId,
   loadBrainConfig,
   loadGlobalConfig,
   loadRepoConfig,
@@ -89,6 +90,50 @@ describe('repo config', () => {
     const text = await readFile(env.root, '.thoughts.yml');
     expect(text.split('\n')[0]).toBe('brain: x');
     expect(await loadRepoConfig(env.root)).toMatchObject({ brain: 'x', repo_id: 'r', tools: ['claude-code'], kit_version: '0.1.0', extra: 'kept' });
+  });
+});
+
+describe('repo_id is a single opaque path segment (SEC-F2)', () => {
+  it('isValidRepoId accepts letters, digits, . _ - and rejects separators and dot segments', () => {
+    for (const ok of ['payments-api', 'my.repo_1', 'a', 'v2', '.hidden', '...']) expect(isValidRepoId(ok)).toBe(true);
+    for (const bad of ['', '.', '..', '../evil', 'a/b', 'a\\b', 'a b', 'a:b', '~x', 'repos/../../x', '\u00e9']) expect(isValidRepoId(bad)).toBe(false);
+  });
+
+  it('rejects traversal and multi-segment repo_id values in .thoughts.yml', async () => {
+    for (const bad of ['../evil', '..', 'a/b', '.', '/abs']) {
+      await writeFile(env.root, '.thoughts.yml', 'brain: git@h:o/b.git\nrepo_id: "' + bad + '"\n');
+      await expect(loadRepoConfig(env.root)).rejects.toMatchObject({
+        exitCode: ExitCode.Validation,
+        message: expect.stringMatching(/^invalid repo config: .*has an invalid repo_id$/),
+        hint: 'use letters, digits, . _ -',
+      });
+    }
+  });
+
+  it('accepts ordinary repo ids', async () => {
+    for (const ok of ['payments-api', 'my.repo_1']) {
+      await writeFile(env.root, '.thoughts.yml', 'brain: git@h:o/b.git\nrepo_id: ' + ok + '\n');
+      expect((await loadRepoConfig(env.root))?.repo_id).toBe(ok);
+    }
+  });
+
+  it('applies the same rule to brain ids derived from a remote', () => {
+    expect(() => brainIdFromRemote('git@host:org/..')).toThrow(ThoughtsError);
+    expect(() => brainIdFromRemote('https://x/y/a b.git')).toThrow(ThoughtsError);
+    expect(brainIdFromRemote('https://x/y/my.brain_2.git')).toBe('my.brain_2');
+  });
+
+  it('applies the same rule to kind names in brain.yml', async () => {
+    await writeFile(env.root, 'brain.yml', 'name: acme\nkinds:\n  "../etc": { template: plan }\n');
+    await expect(loadBrainConfig(env.root)).rejects.toMatchObject({ exitCode: ExitCode.Validation, hint: 'use letters, digits, . _ -' });
+    await writeFile(env.root, 'brain.yml', 'name: acme\nkinds:\n  "a/b": { template: plan }\n');
+    await expect(loadBrainConfig(env.root)).rejects.toMatchObject({ exitCode: ExitCode.Validation });
+  });
+
+  it('applies the same rule to an explicit user_id', async () => {
+    await expect(defaultUserId({ user_id: '../root', brains: {}, attached: [] })).rejects.toMatchObject({ exitCode: ExitCode.Validation });
+    await expect(defaultUserId({ user_id: 'a/b', brains: {}, attached: [] })).rejects.toMatchObject({ exitCode: ExitCode.Validation });
+    expect(await defaultUserId({ user_id: 'jane.doe_1', brains: {}, attached: [] })).toBe('jane.doe_1');
   });
 });
 

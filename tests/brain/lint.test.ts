@@ -43,7 +43,13 @@ describe('lintBrain', () => {
 
     const issues = await lintBrain(root, brain);
     const byRule = (rule: string): LintIssue[] => issues.filter((i) => i.rule === rule);
-    expect(byRule('okf/frontmatter')).toMatchObject([{ severity: 'error', path: '/repos/svc/specs/2026-09-08-bad.md', line: 1 }]);
+    // `repos/svc/templates/plan.md` is also a concept by the specs/09 rule ("all other .md
+    // files under the zones are concepts") and is reported too; assert on the file this
+    // test is about rather than on the exact count.
+    expect(byRule('okf/frontmatter').filter((i) => i.path === '/repos/svc/specs/2026-09-08-bad.md')).toMatchObject([
+      { severity: 'error', path: '/repos/svc/specs/2026-09-08-bad.md', line: 1 },
+    ]);
+    expect(byRule('okf/frontmatter').map((i) => i.path)).toContain('/repos/svc/templates/plan.md');
     expect(byRule('okf/broken-link').map((i) => i.message)).toEqual([
       'sources[0].resource points to /shared/nope.md which does not exist in the bundle',
       'supersedes points to /shared/decisions/missing.md which does not exist in the bundle',

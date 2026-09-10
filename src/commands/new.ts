@@ -21,7 +21,7 @@ import { hasBlocking, scanText } from '../security/scanner.js';
 import { renderTemplate, slugify } from '../templates/render.js';
 import { resolveTemplate } from '../templates/resolve.js';
 import { BUILTIN_TYPES, ExitCode, ThoughtsError, type Finding, type SourceRef, type TemplateVars } from '../types.js';
-import { SecretRefusedError, fromBundlePath, isoDate, isoTimestamp, printWarnings, toBundlePath } from './common.js';
+import { SecretRefusedError, assertRepoIdSegment, fromBundlePath, isoDate, isoTimestamp, printWarnings, toBundlePath } from './common.js';
 
 export interface NewOptions {
   shared?: boolean;
@@ -47,15 +47,19 @@ export interface NewResult {
   warnings: string[];
 }
 
+/** Keys that would reach Object.prototype through a plain object (SEC-F8). */
+const FORBIDDEN_SET_KEYS: readonly string[] = ['__proto__', 'constructor', 'prototype'];
+
 export function parseSetValues(values: string[] | undefined): Record<string, string> {
-  const result: Record<string, string> = {};
+  // A null-prototype object: even a bad key can never touch Object.prototype.
+  const result: Record<string, string> = Object.create(null) as Record<string, string>;
   for (const raw of values ?? []) {
     const eq = raw.indexOf('=');
     if (eq <= 0) {
       throw new ThoughtsError(`invalid --set value "${raw}"`, ExitCode.Validation, { hint: 'use --set key=value' });
     }
     const key = raw.slice(0, eq).trim();
-    if (!/^[A-Za-z_][A-Za-z0-9_.-]*$/.test(key)) {
+    if (!/^[A-Za-z_][A-Za-z0-9_.-]*$/.test(key) || FORBIDDEN_SET_KEYS.includes(key)) {
       throw new ThoughtsError(`invalid --set key "${key}"`, ExitCode.Validation, { hint: 'keys are letters, digits, _ . -' });
     }
     result[key] = raw.slice(eq + 1);
@@ -130,14 +134,26 @@ function refuse(findings: Finding[], verb: string): never {
   throw new SecretRefusedError(findings, verb);
 }
 
-export async function runNew(kind: string, title: string, opts: NewOptions, cwd: string): Promise<NewResult> {
+/**
+ * Map a CLI kind argument to a key of `brain.kinds`: exact key, then the kind
+ * whose template has that name, then `<arg>s` (spec → specs, plan → plans).
+ */
+export function resolveKind(kinds: Record<string, { template: string }>, arg: string): string | undefined {
+  if (Object.prototype.hasOwnProperty.call(kinds, arg)) return arg;
+  const byTemplate = Object.keys(kinds).find((k) => kinds[k]!.template === arg);
+  if (byTemplate) return byTemplate;
+  if (Object.prototype.hasOwnProperty.call(kinds, arg + 's')) return arg + 's';
+  return undefined;
+}
+
+export async function runNew(kindArg: string, titleArg: string | undefined, opts: NewOptions, cwd: string): Promise<NewResult> {
   const now = opts.now ?? new Date();
   const warnings: string[] = [];
   const warn = (m: string): void => {
     warnings.push(m);
     out.warn(m);
   };
-  if (typeof title !== 'string' || title.trim().length === 0) {
+  if ((typeof titleArg !== 'string' || titleArg.trim().length === 0) && !opts.from) {
     throw new ThoughtsError('a title is required', ExitCode.Validation, { hint: 'thoughts new <kind> "<title>"' });
   }
   const set = parseSetValues(opts.set);
@@ -152,13 +168,19 @@ export async function runNew(kind: string, title: string, opts: NewOptions, cwd:
   const brainRoot = ctx.brainRoot;
   const brain = ctx.brainConfig ?? (await loadBrainConfig(brainRoot));
 
-  // Kind and template.
-  const kindCfg = brain.kinds[kind];
-  if (!kindCfg) {
-    throw new ThoughtsError(`unknown kind "${kind}"`, ExitCode.Validation, {
+  // Kind and template. `brain.kinds` is keyed by directory name (`specs`);
+  // the CLI accepts that key, the singular template name (`spec`), or the
+  // key without a trailing `s`.
+  const resolvedKind = resolveKind(brain.kinds, kindArg);
+  if (!resolvedKind) {
+    throw new ThoughtsError(`unknown kind "${kindArg}"`, ExitCode.Validation, {
       hint: 'kinds in this brain: ' + Object.keys(brain.kinds).join(', '),
     });
   }
+  const kind = resolvedKind;
+  // The kind is a key of brain.yml `kinds`; it still becomes a path segment (SEC-F1).
+  assertRepoIdSegment(kind, 'kind');
+  const kindCfg = brain.kinds[kind]!;
   const templateName = kindCfg.template;
   const type =
     BUILTIN_TYPES[templateName] ??
@@ -176,6 +198,7 @@ export async function runNew(kind: string, title: string, opts: NewOptions, cwd:
     zoneDir = `/shared/${kind}`;
     repoField = 'shared';
   } else if (opts.user) {
+    assertRepoIdSegment(userId, 'user id');
     zoneDir = `/users/${userId}/${kind}`;
     repoField = `user:${userId}`;
   } else {
@@ -185,6 +208,8 @@ export async function runNew(kind: string, title: string, opts: NewOptions, cwd:
         hint: 'pass --repo <id> or --shared',
       });
     }
+    // SEC-F1: `--repo ../x` or a tampered `.thoughts.yml` must never leave repos/.
+    assertRepoIdSegment(repoId, opts.repo !== undefined ? '--repo' : 'repo_id in .thoughts.yml');
     zoneDir = `/repos/${repoId}/${kind}`;
     repoField = repoId;
   }
@@ -194,6 +219,25 @@ export async function runNew(kind: string, title: string, opts: NewOptions, cwd:
     const findings = scanText(value, '--set ' + key);
     if (hasBlocking(findings)) refuse(findings, 'create file');
     for (const f of findings) warn(`--set ${key}: possible secret (${f.kind}) ${f.masked}`);
+  }
+
+  // `--from`: resolved before the variables so it can supply a missing title.
+  let fromPath: string | undefined;
+  let fromTitle: string | undefined;
+  let fromFrontmatter: Record<string, unknown> | undefined;
+  if (opts.from) {
+    fromPath = resolveFromPath(opts.from, brainRoot, cwd);
+    const text = fs.readFileSync(fromBundlePath(brainRoot, fromPath), 'utf8');
+    const parsed = parseFrontmatter(text);
+    if (parsed.error) warn(`--from ${fromPath}: frontmatter not parsed (${parsed.error})`);
+    fromTitle = typeof parsed.frontmatter.title === 'string' ? parsed.frontmatter.title : undefined;
+    fromFrontmatter = parsed.frontmatter;
+  }
+  const title = titleArg && titleArg.trim().length > 0 ? titleArg : fromTitle;
+  if (!title) {
+    throw new ThoughtsError('a title is required (the --from thought has none)', ExitCode.Validation, {
+      hint: 'thoughts new <kind> "<title>" --from <path>',
+    });
   }
 
   // Template variables (specs/06 table).
@@ -217,16 +261,7 @@ export async function runNew(kind: string, title: string, opts: NewOptions, cwd:
   }
   for (const [k, v] of Object.entries(set)) if (k !== 'author') vars[k] = v;
 
-  let fromPath: string | undefined;
-  let fromTitle: string | undefined;
-  if (opts.from) {
-    fromPath = resolveFromPath(opts.from, brainRoot, cwd);
-    const text = fs.readFileSync(fromBundlePath(brainRoot, fromPath), 'utf8');
-    const parsed = parseFrontmatter(text);
-    if (parsed.error) warn(`--from ${fromPath}: frontmatter not parsed (${parsed.error})`);
-    fromTitle = typeof parsed.frontmatter.title === 'string' ? parsed.frontmatter.title : undefined;
-    vars.from = { ...parsed.frontmatter, path: fromPath };
-  }
+  if (fromPath && fromFrontmatter) vars.from = { ...fromFrontmatter, path: fromPath };
 
   // Resolve + render.
   const resolveOpts: Parameters<typeof resolveTemplate>[1] = { brainRoot, brain, cwd };
@@ -244,6 +279,12 @@ export async function runNew(kind: string, title: string, opts: NewOptions, cwd:
   const bundlePath = `${zoneDir}/${filename}`;
   const absPath = path.join(dirAbs, filename);
   if (!locate(bundlePath)) throw new ThoughtsError(`invalid destination ${bundlePath}`, ExitCode.Validation);
+  // Last-line guard (SEC-F1): whatever the ids were, the file stays inside the brain.
+  if (!path.resolve(absPath).startsWith(path.resolve(brainRoot) + path.sep)) {
+    throw new ThoughtsError(`destination ${bundlePath} is outside the brain`, ExitCode.Validation, {
+      hint: 'repo, user and kind ids are single path segments: letters, digits, . _ -',
+    });
+  }
 
   // Post-process the rendered frontmatter for --from (preserving unknown keys).
   let content = output;
@@ -287,7 +328,7 @@ export function register(program: Command): void {
     .command('new')
     .description('Create a thought from a template in the right zone')
     .argument('<kind>', 'kind, e.g. spec, plan, research, decision, pr')
-    .argument('<title>', 'title of the thought')
+    .argument('[title]', 'title of the thought (defaults to the --from thought\'s title)')
     .option('--shared', 'create under shared/ instead of this repo')
     .option('--repo <id>', 'create under repos/<id>/')
     .option('--user', 'create under users/<me>/')
@@ -298,7 +339,7 @@ export function register(program: Command): void {
     .option('--print-path', 'only print the path (default behaviour)')
     .option('--json', 'print {path, absPath, kind, type, template} as JSON')
     .option('--brain <id|url>', 'brain to use when outside a repo')
-    .action(async (kind: string, title: string, opts: NewOptions) => {
+    .action(async (kind: string, title: string | undefined, opts: NewOptions) => {
       await runNew(kind, title, opts, process.cwd());
     });
 }

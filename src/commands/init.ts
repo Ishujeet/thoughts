@@ -27,7 +27,7 @@ import YAML from 'yaml';
 import { getAdapter, detectAdapters, KNOWN_TOOLS } from '../adapters/index.js';
 import { renderInstructions } from '../adapters/kit.js';
 import { upsertManagedBlock } from '../adapters/managed-block.js';
-import { cliVersion, readAsset } from '../assets.js';
+import { assetPath, cliVersion, readAsset } from '../assets.js';
 import {
   brainIdFromRemote,
   loadBrainConfig,
@@ -54,7 +54,16 @@ import {
   type StepReport,
   type TemplateSource,
 } from '../types.js';
-import { SecretRefusedError, isoTimestamp, printWarnings, splitList, translateGitError } from './common.js';
+import {
+  SecretRefusedError,
+  assertRepoIdSegment,
+  hasUrlCredentials,
+  isoTimestamp,
+  printWarnings,
+  redactUrlCredentials,
+  splitList,
+  translateGitError,
+} from './common.js';
 import { runSync, type SyncResult } from './sync.js';
 
 export interface InitOptions {
@@ -92,19 +101,46 @@ export interface InitResult {
 const SUPPORTED_PLATFORMS: readonly string[] = ['darwin', 'linux'];
 const TEMPLATE_SOURCE_RE = /^(builtin|brain|path:.+|git:.+)$/;
 
-/** The pre-commit hook installed into the CLI-owned brain clone (specs/15 "Where the scan runs"). */
-export function preCommitHookScript(version: string): string {
+/** Quote a string for POSIX sh (single quotes; embedded quotes escaped). */
+function shQuote(value: string): string {
+  return "'" + value.replace(/'/g, "'\\''") + "'";
+}
+
+/** Absolute path of the CLI entry point (`dist/index.js`), located from this module, never from cwd. */
+export function cliEntryPath(): string {
+  return assetPath('dist', 'index.js');
+}
+
+/**
+ * The pre-commit hook installed into the CLI-owned brain clone (specs/15
+ * "Where the scan runs"). It fails closed: `thoughts` on PATH, else the node
+ * binary and CLI entry that installed it, else the commit is refused (QA-F3).
+ */
+export function preCommitHookScript(version: string, opts: { node?: string; cli?: string } = {}): string {
+  const node = opts.node ?? process.execPath;
+  const cli = opts.cli ?? cliEntryPath();
   return [
     '#!/bin/sh',
     `# thoughts-kit v${version} — secret scan of staged files in this brain clone (specs/15).`,
     '# Installed by `thoughts init`; re-installed when missing. Do not edit.',
     'if command -v thoughts >/dev/null 2>&1; then',
     '  exec thoughts scan --staged',
+    `elif [ -x ${shQuote(node)} ] && [ -f ${shQuote(cli)} ]; then`,
+    `  exec ${shQuote(node)} ${shQuote(cli)} scan --staged`,
     'fi',
-    'echo "thoughts: CLI not on PATH; staged files were not scanned for secrets" >&2',
-    'exit 0',
+    'echo "thoughts: CLI not found; refusing commit — staged files were not scanned for secrets (specs/15)" >&2',
+    'exit 1',
     '',
   ].join('\n');
+}
+
+/** Refuse a brain remote with an embedded password before anything is written (SEC-F6). */
+function assertNoUrlCredentials(remote: string): void {
+  if (hasUrlCredentials(remote)) {
+    throw new ThoughtsError('brain URL contains embedded credentials', ExitCode.Validation, {
+      hint: 'use a git credential helper or an SSH remote',
+    });
+  }
 }
 
 function isUrl(value: string): boolean {
@@ -177,6 +213,7 @@ interface BrainRef {
  */
 async function resolveBrainRef(ref: string, fromRepoConfig: boolean): Promise<BrainRef> {
   const raw = ref.trim();
+  assertNoUrlCredentials(raw);
   if (isUrl(raw)) {
     const filePath = raw.startsWith('file://') ? raw.slice('file://'.length) : undefined;
     return {
@@ -297,17 +334,27 @@ export async function runInit(opts: InitOptions, cwd: string): Promise<InitResul
   let brainRef: BrainRef;
   if (existingRepo) {
     if (opts.brain && opts.brain.trim() !== existingRepo.brain) {
-      out.warn(`${REPO_CONFIG_FILENAME} already names brain ${existingRepo.brain}; ignoring --brain ${opts.brain}`);
+      out.warn(
+        `${REPO_CONFIG_FILENAME} already names brain ${redactUrlCredentials(existingRepo.brain)}; ignoring --brain ${redactUrlCredentials(opts.brain)}`,
+      );
     }
     brainRef = await resolveBrainRef(existingRepo.brain, true);
   } else if (opts.brain) {
     brainRef = await resolveBrainRef(opts.brain, false);
+  } else if (ctx.global.default_brain && fs.existsSync(path.join(brainCloneDir(ctx.global.default_brain), BRAIN_CONFIG_FILENAME))) {
+    // `--yes` accepts defaults: the default brain from global config (specs/02 step 1.3, "pick from brains in global config").
+    // With --json this note must not land on stdout (contract §7).
+    const note = `using default brain ${ctx.global.default_brain} (pass --brain to choose another)`;
+    if (opts.json) out.warn(note);
+    else out.info(note);
+    brainRef = await resolveBrainRef(ctx.global.default_brain, false);
   } else {
     throw new ThoughtsError('--brain is required with --yes when the repo has no ' + REPO_CONFIG_FILENAME, ExitCode.Validation, {
       hint: 'thoughts init --yes --brain <remote url | local path>',
     });
   }
   const { brainId, remote } = brainRef;
+  const shownRemote = redactUrlCredentials(remote);
   const brainRoot = brainCloneDir(brainId);
   let brainCreated = false;
   if (brainRef.createAt) {
@@ -349,13 +396,13 @@ export async function runInit(opts: InitOptions, cwd: string): Promise<InitResul
       throw translateGitError(err, 'clone', remote);
     }
     if (!fs.existsSync(path.join(brainRoot, BRAIN_CONFIG_FILENAME))) {
-      throw new ThoughtsError(`${remote} is not a brain: ${BRAIN_CONFIG_FILENAME} is missing`, ExitCode.Validation, {
+      throw new ThoughtsError(`${shownRemote} is not a brain: ${BRAIN_CONFIG_FILENAME} is missing`, ExitCode.Validation, {
         hint: 'point --brain at a brain repository, or at a new (empty) path to create one',
       });
     }
-    report(steps, `brain clone ${brainRoot}`, 'created', `from ${remote}`);
+    report(steps, `brain clone ${brainRoot}`, 'created', `from ${shownRemote}`);
   } else {
-    report(steps, `brain clone ${brainRoot}`, 'dry-run', `would clone ${remote}`);
+    report(steps, `brain clone ${brainRoot}`, 'dry-run', `would clone ${shownRemote}`);
   }
   const haveBrain = fs.existsSync(path.join(brainRoot, BRAIN_CONFIG_FILENAME));
   const brain: BrainConfig | undefined = haveBrain ? await loadBrainConfig(brainRoot) : undefined;
@@ -391,9 +438,8 @@ export async function runInit(opts: InitOptions, cwd: string): Promise<InitResul
     existingRepo?.repo_id ||
     (codeRemote ? repoIdFromRemote(codeRemote) : undefined) ||
     path.basename(repoRoot);
-  if (!/^[A-Za-z0-9._-]+$/.test(repoId)) {
-    throw new ThoughtsError(`invalid repo id "${repoId}"`, ExitCode.Validation, { hint: 'use letters, digits, . _ -' });
-  }
+  // SEC-F1: a repo id is one path segment; `..` and separators are refused.
+  assertRepoIdSegment(repoId, 'repo id');
   const tools = toolSelection(opts, existingRepo, repoRoot);
   for (const t of tools) {
     if (!KNOWN_TOOLS.includes(t)) out.warn(`unknown tool "${t}"; known tools: ${KNOWN_TOOLS.join(', ')}`);
@@ -645,7 +691,9 @@ export async function runInit(opts: InitOptions, cwd: string): Promise<InitResul
     // Pushing into a checked-out local repo only works for brains we created
     // (receive.denyCurrentBranch=updateInstead); otherwise commit locally only.
     const pushable = remoteConfigured && !fetchFailed && (!brainRef.localNonBare || brainCreated);
-    const syncOpts: Parameters<typeof runSync>[0] = { push: pushable };
+    // The inner sync prints nothing itself; its outcome becomes a row of the
+    // summary table (and the `sync` field of the JSON report).
+    const syncOpts: Parameters<typeof runSync>[0] = { push: pushable, quiet: true };
     if (fetchFailed) syncOpts.pushOnly = true; // offline: commit locally, no pull
     sync = await runSync(syncOpts, repoRoot);
     report(
@@ -661,7 +709,7 @@ export async function runInit(opts: InitOptions, cwd: string): Promise<InitResul
   const result: InitResult = { repoRoot, repoId, brainId, brainRemote: remote, brainRoot, tools, steps, dryRun };
   if (sync) result.sync = sync;
   if (opts.json) {
-    out.print(JSON.stringify({ ...result, sync: undefined }, null, 2));
+    out.print(JSON.stringify(result, null, 2));
   } else {
     printSummary(steps);
     out.info('');

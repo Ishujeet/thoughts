@@ -84,7 +84,12 @@ export const KNOWN_DETECTORS: readonly Detector[] = [
   { kind: 'github token', severity: 'block', regex: /(?<![A-Za-z0-9])github_pat_[A-Za-z0-9_]{20,}/g },
   { kind: 'gitlab token', severity: 'block', regex: /(?<![A-Za-z0-9])glpat-[A-Za-z0-9_\-]{20,}/g },
   { kind: 'slack token', severity: 'block', regex: /(?<![A-Za-z0-9])xox[abprs]-[A-Za-z0-9-]{10,}/g },
-  { kind: 'slack webhook', severity: 'block', regex: /hooks\.slack\.com\/services\/[A-Za-z0-9]+\/[A-Za-z0-9]+\/[A-Za-z0-9]+/g },
+  {
+    kind: 'slack webhook',
+    severity: 'block',
+    // Include the scheme when present so the masked form (`http****…`) reveals nothing of the URL path.
+    regex: /(?:https?:\/\/)?hooks\.slack\.com\/services\/[A-Za-z0-9]+\/[A-Za-z0-9]+\/[A-Za-z0-9]+/g,
+  },
   { kind: 'google api key', severity: 'block', regex: /(?<![A-Za-z0-9])AIza[0-9A-Za-z_\-]{35}(?![0-9A-Za-z_\-])/g },
   { kind: 'stripe secret key', severity: 'block', regex: /(?<![A-Za-z0-9])(?:sk_live|sk_test|rk_live|rk_test)_[A-Za-z0-9]{10,}/g },
   { kind: 'stripe webhook secret', severity: 'block', regex: /(?<![A-Za-z0-9])whsec_[A-Za-z0-9]{10,}/g },

@@ -36,7 +36,12 @@ export function translateGitError(err: unknown, phase: GitPhase, detail?: string
   if (!(err instanceof GitError)) {
     return new ThoughtsError(err instanceof Error ? err.message : String(err), ExitCode.Validation, { cause: err });
   }
-  const stderr = err.stderr.trim().split('\n').filter((l) => l.length > 0).slice(-1)[0] ?? `git ${err.args[0]} failed`;
+  // Never echo an embedded password: neither the remote we were given nor
+  // whatever git printed about it (SEC-F6).
+  if (detail !== undefined) detail = redactUrlCredentials(detail);
+  const stderr = redactUrlCredentials(
+    err.stderr.trim().split('\n').filter((l) => l.length > 0).slice(-1)[0] ?? `git ${err.args[0]} failed`,
+  );
   if (err.exitCode === 127) {
     return new ThoughtsError('git is not on PATH', ExitCode.Validation, { hint: 'install git and re-run' });
   }
@@ -53,6 +58,33 @@ export function translateGitError(err: unknown, phase: GitPhase, detail?: string
     });
   }
   return new ThoughtsError(`git ${err.args.join(' ')} failed: ${stderr}`, ExitCode.Validation, { cause: err });
+}
+
+/**
+ * A single path segment supplied by the user or a config file (repo id, user
+ * id, kind): letters, digits, `.`, `_`, `-` only; never `.` or `..`. Anything
+ * else could escape the zone directory (SEC-F1), so it is refused with exit 1.
+ */
+export function assertRepoIdSegment(id: string, source: string): void {
+  if (!/^[A-Za-z0-9._-]+$/.test(id) || id === '.' || id === '..') {
+    throw new ThoughtsError(`invalid ${source} "${id}"`, ExitCode.Validation, { hint: 'use letters, digits, . _ -' });
+  }
+}
+
+const URL_USERINFO_RE = /^([a-z][a-z0-9+.-]*:\/\/)([^/@\s]*:[^/@\s]*)@/i;
+
+/**
+ * True when a `scheme://user:password@host` URL carries a password. A bare
+ * username (`ssh://git@host/…`, scp-style `git@host:org/brain.git`) is not a
+ * credential.
+ */
+export function hasUrlCredentials(url: string): boolean {
+  return URL_USERINFO_RE.test(url);
+}
+
+/** Replace `user:password@` in a URL with `***@` wherever it occurs in `text`. */
+export function redactUrlCredentials(text: string): string {
+  return text.replace(/([a-z][a-z0-9+.-]*:\/\/)([^/@\s]*:[^/@\s]*)@/gi, '$1***@');
 }
 
 /** Bundle-relative path (leading slash) of an absolute path inside the brain. */

@@ -6,7 +6,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import YAML from 'yaml';
 import { BRAIN_CONFIG_FILENAME, REPO_CONFIG_FILENAME } from '../paths.js';
-import { DEFAULT_KINDS, OKF_VERSION, type BrainConfig, type BrainRepoEntry, type KindConfig, type RepoConfig } from '../types.js';
+import { DEFAULT_KINDS, ExitCode, OKF_VERSION, ThoughtsError, type BrainConfig, type BrainRepoEntry, type KindConfig, type RepoConfig } from '../types.js';
+import { ID_HINT, isValidRepoId } from './ids.js';
 import { renderIndexes } from './generate.js';
 
 export { locate } from './location.js';
@@ -110,10 +111,19 @@ export async function scaffoldBrain(root: string, opts: ScaffoldOptions): Promis
   return created;
 }
 
+/** Ids joined into brain paths must be a single opaque segment (no `/`, `..`, …). */
+function assertPathSegment(id: string, what: string): void {
+  if (!isValidRepoId(id)) {
+    throw new ThoughtsError('invalid ' + what + ': ' + id, ExitCode.Validation, { hint: ID_HINT });
+  }
+}
+
 /** `repos/<id>/<kind>/.gitkeep` for every kind. Returns created bundle-relative paths. */
 export async function ensureRepoDirs(brainRoot: string, repoId: string, kinds: Record<string, KindConfig>): Promise<string[]> {
+  assertPathSegment(repoId, 'repo id');
   const created: string[] = [];
   for (const kind of Object.keys(kinds)) {
+    assertPathSegment(kind, 'kind name');
     const rel = path.join('repos', repoId, kind, '.gitkeep');
     if (await createIfMissing(brainRoot, rel, '')) created.push('/' + rel);
   }
@@ -126,6 +136,7 @@ export async function ensureRepoDirs(brainRoot: string, repoId: string, kinds: R
  * existing file are preserved. Returns true when the file changed.
  */
 export async function registerRepo(brainRoot: string, entry: BrainRepoEntry): Promise<boolean> {
+  assertPathSegment(entry.id, 'repo id');
   const file = path.join(brainRoot, BRAIN_CONFIG_FILENAME);
   const text = await fs.promises.readFile(file, 'utf8');
   const doc = YAML.parseDocument(text);

@@ -158,16 +158,16 @@ async function collectIncoming(brainRoot: string, from: string, to: string): Pro
   return incoming;
 }
 
-function printIncoming(incoming: IncomingChange[]): void {
+function printIncoming(incoming: IncomingChange[], say: (m: string) => void): void {
   if (incoming.length === 0) return;
-  out.info('incoming from other repos:');
+  say('incoming from other repos:');
   let current = '';
   for (const c of incoming) {
     if (c.group !== current) {
       current = c.group;
-      out.info(`  ${current}`);
+      say(`  ${current}`);
     }
-    out.info(`    ${c.change.padEnd(7)} ${(c.kind ?? '').padEnd(10)} ${c.title}`);
+    say(`    ${c.change.padEnd(7)} ${(c.kind ?? '').padEnd(10)} ${c.title}`);
   }
 }
 
@@ -185,16 +185,36 @@ async function resolveGeneratedConflicts(
     const conflicted = await git.conflictedFiles(brainRoot);
     if (conflicted.length === 0) {
       if (!(await git.isRebaseInProgress(brainRoot))) return [];
-      // Resolved but not continued (or an empty step): continue the rebase.
+      // Resolved but not continued (or an empty step): continue the rebase;
+      // a replayed commit that became empty is skipped.
       try {
         await git.git(['-c', 'core.editor=true', 'rebase', '--continue'], { cwd: brainRoot });
       } catch {
-        return conflicted;
+        try {
+          await git.git(['rebase', '--skip'], { cwd: brainRoot });
+        } catch {
+          return await git.conflictedFiles(brainRoot);
+        }
       }
       continue;
     }
     const concept = conflicted.filter((p) => !isGeneratedFile('/' + p));
-    if (concept.length > 0) return concept;
+    if (concept.length > 0) {
+      // Generated files never need a human (specs/03): settle them on the
+      // upstream side so `git rebase --continue` only waits for the concept
+      // files. The next `sync` regenerates them from the resolved content.
+      for (const p of conflicted) {
+        if (isGeneratedFile('/' + p)) {
+          try {
+            await git.git(['checkout', '--ours', '--', p], { cwd: brainRoot });
+            await git.git(['add', '--', p], { cwd: brainRoot });
+          } catch {
+            // leave it to the user
+          }
+        }
+      }
+      return concept;
+    }
     // `ours` during a rebase is the upstream side; regenerate re-adds our entries.
     for (const p of conflicted) {
       try {
@@ -228,7 +248,21 @@ export async function runSync(opts: SyncOptions, cwd: string): Promise<SyncResul
   if (opts.pullOnly && opts.pushOnly) {
     throw new ThoughtsError('--pull-only and --push-only are mutually exclusive', ExitCode.Validation);
   }
+  // `--quiet` is process-global in output.ts; restore it afterwards so a
+  // caller (init's initial sync) keeps its own stdout.
+  const wasQuiet = out.isQuiet();
   if (opts.quiet) out.setQuiet(true);
+  try {
+    return await syncImpl(opts, cwd);
+  } finally {
+    if (opts.quiet) out.setQuiet(wasQuiet);
+  }
+}
+
+async function syncImpl(opts: SyncOptions, cwd: string): Promise<SyncResult> {
+  // With --json stdout is exactly one JSON document (contract §7): the
+  // progress lines go to stderr as debug output; the report carries the facts.
+  const say = (m: string): void => (opts.json ? out.debug(m) : out.info(m));
   const now = opts.now ?? new Date();
   const ctx = await preflight(cwd, { command: 'sync', brain: opts.brain, cliVersion: cliVersion() });
   printWarnings(ctx);
@@ -252,6 +286,7 @@ export async function runSync(opts: SyncOptions, cwd: string): Promise<SyncResul
   }
 
   const remote = await git.remoteUrl(brainRoot);
+  const upstreamBefore = await git.upstreamSha(brainRoot);
   let headBefore: string | undefined = (await git.hasHead(brainRoot)) ? await git.headSha(brainRoot) : undefined;
 
   if (!opts.pullOnly) {
@@ -309,7 +344,7 @@ export async function runSync(opts: SyncOptions, cwd: string): Promise<SyncResul
       }
       result.commitMessage = message;
       headBefore = result.committed;
-      out.info(`committed ${result.committed.slice(0, 7)}: ${message.split('\n')[0]}`);
+      say(`committed ${result.committed.slice(0, 7)}: ${message.split('\n')[0]}`);
     }
   }
 
@@ -331,6 +366,26 @@ export async function runSync(opts: SyncOptions, cwd: string): Promise<SyncResul
     }
   }
 
+  // The rebase rewrites the local commit's sha, and drops it entirely when it
+  // only regenerated indexes that upstream already carried. Re-find it by its
+  // message among the commits now sitting on top of the old upstream.
+  if (result.committed && result.commitMessage && result.pulled && upstreamBefore !== undefined) {
+    let found: string | undefined;
+    for (const sha of await git.revList(brainRoot, upstreamBefore)) {
+      if ((await git.messageOf(brainRoot, sha)) === result.commitMessage) {
+        found = sha;
+        break;
+      }
+    }
+    if (found === undefined) {
+      out.debug(`local commit ${result.committed.slice(0, 7)} became empty during the rebase and was dropped`);
+      delete result.committed;
+      delete result.commitMessage;
+    } else {
+      result.committed = found;
+    }
+  }
+
   // 5. Push.
   const wantPush = opts.push !== false && !opts.pullOnly && remote !== undefined;
   if (wantPush) {
@@ -349,13 +404,10 @@ export async function runSync(opts: SyncOptions, cwd: string): Promise<SyncResul
     const headNow = await git.headSha(brainRoot);
     result.incoming = await collectIncoming(brainRoot, headBefore, headNow);
   }
-  if (opts.json) {
-    out.print(JSON.stringify(result, null, 2));
-  } else {
-    printIncoming(result.incoming);
-    if (!result.committed && result.incoming.length === 0) out.info('nothing to do');
-    else if (result.pushed) out.info('pushed');
-  }
+  printIncoming(result.incoming, say);
+  if (!result.committed && result.incoming.length === 0) say('nothing to do');
+  else if (result.pushed) say('pushed');
+  if (opts.json) out.print(JSON.stringify(result, null, 2));
   return result;
 }
 

@@ -282,8 +282,12 @@ describe('custom patterns, allow list, inline allow', () => {
     expect(scanText(text, '/repos/svc/research/x.md', { allow })).toEqual([]);
     // same masked prefix, different path → different fingerprint → still found
     expect(scanText(text, '/repos/svc/research/y.md', { allow })).toHaveLength(1);
-    // a different value changes the masked form, hence the fingerprint
-    const changed = 'key: sk_live_' + rep('9zQ1', 6);
+    // The fingerprint is sha256(path + kind + masked) per specs/15 and the contract, so
+    // a value whose masked form differs (here: a shorter value, fewer stars) is no
+    // longer covered by the entry. A change that keeps the same first 4 characters and
+    // the same 16-star cap keeps the same masked form and therefore the same fingerprint.
+    const changed = 'key: sk_live_' + rep('9z', 5);
+    expect(mask('sk_live_' + rep('9z', 5))).not.toBe((f as Finding).masked);
     expect(scanText(changed, '/repos/svc/research/x.md', { allow })).toHaveLength(1);
   });
 

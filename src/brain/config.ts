@@ -23,7 +23,10 @@ import {
   type RepoConfig,
   type ResolvedConfig,
 } from '../types.js';
+import { ID_HINT, isValidRepoId, sanitiseId } from './ids.js';
 import { findBrainRoot, findRepoRoot } from './layout.js';
+
+export { isValidRepoId } from './ids.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -120,6 +123,12 @@ export async function loadRepoConfig(repoRoot: string): Promise<RepoConfig | und
       });
     }
   }
+  // repo_id is joined into `<brain>/repos/<id>/…`: it must be one opaque segment.
+  if (!isValidRepoId(data.repo_id as string)) {
+    throw new ThoughtsError('invalid repo config: ' + file + ' has an invalid repo_id', ExitCode.Validation, {
+      hint: ID_HINT,
+    });
+  }
   const tools = Array.isArray(data.tools) ? data.tools.filter((t): t is string => typeof t === 'string') : [];
   const cfg: RepoConfig = { ...data, brain: data.brain as string, repo_id: data.repo_id as string, tools };
   if (typeof data.kit_version === 'number') cfg.kit_version = String(data.kit_version);
@@ -147,10 +156,16 @@ const BRAIN_KEYS = [
   'hooks',
 ] as const;
 
-function normaliseKinds(value: unknown): Record<string, KindConfig> | undefined {
+function normaliseKinds(value: unknown, file: string): Record<string, KindConfig> | undefined {
   if (!isRecord(value)) return undefined;
   const kinds: Record<string, KindConfig> = {};
   for (const [name, raw] of Object.entries(value)) {
+    // Kind names become `<brain>/<zone>/<kind>/` directories.
+    if (!isValidRepoId(name)) {
+      throw new ThoughtsError('invalid brain config: ' + file + ' has an invalid kind name: ' + name, ExitCode.Validation, {
+        hint: ID_HINT,
+      });
+    }
     if (isRecord(raw) && typeof raw.template === 'string') {
       kinds[name] = { ...raw, template: raw.template };
     } else if (typeof raw === 'string') {
@@ -189,7 +204,7 @@ export async function loadBrainConfig(brainRoot: string): Promise<BrainConfig> {
     repos: Array.isArray(data.repos)
       ? (data.repos.filter((r) => isRecord(r) && typeof r.id === 'string') as BrainConfig['repos'])
       : [],
-    kinds: normaliseKinds(data.kinds) ?? { ...DEFAULT_KINDS },
+    kinds: normaliseKinds(data.kinds, file) ?? { ...DEFAULT_KINDS },
     templates: { ...templatesRaw, source: source as BrainConfig['templates']['source'] },
   };
   return cfg;
@@ -221,6 +236,12 @@ export function brainIdFromRemote(remote: string): string {
   if (seg.length === 0) {
     throw new ThoughtsError('cannot derive a brain id from remote: ' + remote, ExitCode.Validation, {
       hint: 'pass --brain <id> or use a remote URL that ends in a repository name',
+    });
+  }
+  // The id names the clone directory `~/.thoughts/brains/<id>`: one opaque segment only.
+  if (!isValidRepoId(seg)) {
+    throw new ThoughtsError('cannot derive a brain id from remote: ' + remote, ExitCode.Validation, {
+      hint: 'the repository name must ' + ID_HINT,
     });
   }
   return seg;
@@ -310,18 +331,35 @@ async function gitUserEmail(): Promise<string | undefined> {
   }
 }
 
-/** `global.user_id` → git `user.email` local part → OS username. */
+/**
+ * `global.user_id` → git `user.email` local part → OS username.
+ *
+ * The result names `<brain>/users/<id>/`, so it must be a single path segment.
+ * An explicit `user_id` that is not one is a configuration error; derived
+ * values are sanitised (disallowed characters become `-`) and skipped when
+ * nothing valid remains.
+ */
 export async function defaultUserId(global: GlobalConfig): Promise<string> {
-  if (typeof global.user_id === 'string' && global.user_id.trim().length > 0) return global.user_id.trim();
+  if (typeof global.user_id === 'string' && global.user_id.trim().length > 0) {
+    const id = global.user_id.trim();
+    if (!isValidRepoId(id)) {
+      throw new ThoughtsError('invalid global config: ' + globalConfigPath() + ' has an invalid user_id', ExitCode.Validation, {
+        hint: ID_HINT,
+      });
+    }
+    return id;
+  }
   const email = await gitUserEmail();
   if (email) {
     const at = email.indexOf('@');
-    const local = at > 0 ? email.slice(0, at) : email;
+    const local = sanitiseId(at > 0 ? email.slice(0, at) : email);
     if (local.length > 0) return local;
   }
+  let username = '';
   try {
-    return os.userInfo().username;
+    username = os.userInfo().username;
   } catch {
-    return process.env.USER ?? 'unknown';
+    username = process.env.USER ?? '';
   }
+  return sanitiseId(username) || 'unknown';
 }

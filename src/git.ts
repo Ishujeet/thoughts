@@ -248,6 +248,29 @@ export async function diffNameStatus(cwd: string, from: string, to = 'HEAD'): Pr
   return entries;
 }
 
+/** Sha of the upstream tracking ref (`@{u}`), or undefined when there is none. */
+export async function upstreamSha(cwd: string): Promise<string | undefined> {
+  try {
+    const r = await git(['rev-parse', '--verify', '--quiet', '@{u}'], { cwd });
+    const sha = r.stdout.trim();
+    return sha.length > 0 ? sha : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Commit shas reachable from `to` but not from `from`, newest first. */
+export async function revList(cwd: string, from: string, to = 'HEAD'): Promise<string[]> {
+  const r = await git(['rev-list', `${from}..${to}`], { cwd });
+  return r.stdout.split('\n').filter((l) => l.length > 0);
+}
+
+/** Full commit message (subject + body) of `sha`. */
+export async function messageOf(cwd: string, sha: string): Promise<string> {
+  const r = await git(['log', '-1', '--format=%B', sha], { cwd });
+  return r.stdout.replace(/\n+$/, '');
+}
+
 export async function isRebaseInProgress(cwd: string): Promise<boolean> {
   try {
     const r = await git(['rev-parse', '--git-path', 'rebase-merge'], { cwd });
@@ -265,7 +288,7 @@ export function looksLikeRemoteFailure(err: unknown): boolean {
   if (!(err instanceof GitError)) return false;
   const s = err.stderr.toLowerCase();
   return (
-    /could not read from remote|unable to access|could not resolve|connection (refused|timed out|reset)|does not appear to be a git repository|repository not found|no such file or directory|failed to connect|network is unreachable|remote: |fatal: unable to|permission denied \(publickey\)|no route to host|not found|failed to push some refs/.test(
+    /could not read from remote|unable to access|could not resolve|does not exist|connection (refused|timed out|reset)|does not appear to be a git repository|repository not found|no such file or directory|failed to connect|network is unreachable|remote: |fatal: unable to|permission denied \(publickey\)|no route to host|not found|failed to push some refs/.test(
       s,
     )
   );
