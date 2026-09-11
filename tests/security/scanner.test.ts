@@ -37,10 +37,15 @@ describe('mask / fingerprint / hasBlocking', () => {
     expect(mask(rep('a', 100))).toBe('aaaa' + rep('*', 16));
   });
 
-  it('fingerprints path + kind + masked with sha256', () => {
-    const expected = 'sha256:' + createHash('sha256').update('/a.md\nstripe secret key\nsk_l****', 'utf8').digest('hex');
-    expect(fingerprint('/a.md', 'stripe secret key', 'sk_l****')).toBe(expected);
-    expect(fingerprint('/a.md', 'stripe secret key', 'sk_l***')).not.toBe(expected);
+  it('fingerprints path + kind + masked + sha256(raw) with sha256; the raw value itself never appears', () => {
+    const raw = 'sk_live_' + rep('4eC3', 6);
+    const rawHash = createHash('sha256').update(raw, 'utf8').digest('hex');
+    const expected = 'sha256:' + createHash('sha256').update('/a.md\nstripe secret key\nsk_l****\n' + rawHash, 'utf8').digest('hex');
+    expect(fingerprint('/a.md', 'stripe secret key', 'sk_l****', raw)).toBe(expected);
+    expect(fingerprint('/a.md', 'stripe secret key', 'sk_l***', raw)).not.toBe(expected);
+    expect(fingerprint('/a.md', 'stripe secret key', 'sk_l****', raw + 'x')).not.toBe(expected);
+    expect(expected).toMatch(/^sha256:[0-9a-f]{64}$/);
+    expect(expected).not.toContain(raw);
   });
 
   it('hasBlocking is true for block and unscannable only', () => {
@@ -202,7 +207,33 @@ describe('known-format detectors: positive and placeholder-negative fixtures', (
     expect(kinds('postgres://app:${DB_PASSWORD}@db.internal/orders')).toEqual([]);
     expect(kinds('postgres://app:<password>@db.internal/orders')).toEqual([]);
     expect(kinds('postgres://db.internal:5432/orders')).toEqual([]);
-    expect(kinds('https://user:' + pw + '@example.com')).toEqual([]);
+    // a password that merely starts with `example` inside a real connection string is still a secret
+    expect(kinds('postgres://app:example_prod_pw_here@db/orders')).toEqual(['connection string']);
+  });
+
+  it('url credentials: any scheme://user:password@host is blocked and masked whole (SEC-F6)', () => {
+    const pw = 's3cr3tPasswd0123';
+    const f = one('remote: https://alice:' + pw + '@git.internal/team/brain.git');
+    expect(f).toMatchObject({ kind: 'url credentials', severity: 'block', masked: 'http' + rep('*', 16) });
+    expectNoLeak([f], pw);
+    expect(JSON.stringify([f])).not.toContain('git.internal');
+    for (const scheme of ['http://', 'git://', 'ssh://', 'ftp://', 'svn+ssh://']) {
+      expect(kinds(scheme + 'user:' + pw + '@host/x'), scheme).toEqual(['url credentials']);
+    }
+    // db schemes keep their own kind
+    expect(kinds('mysql://user:' + pw + '@host/db')).toEqual(['connection string']);
+    // placeholders and password-less forms
+    for (const line of [
+      'https://alice:<password>@host/x',
+      'https://alice:${TOKEN}@host/x',
+      'https://alice:xxxxxxxxxxxxxxxx@host/x',
+      'ssh://git@host/x',
+      'https://user@host/x',
+      'git@github.com:org/brain.git',
+      'https://git.internal/team/brain.git',
+    ]) {
+      expect(kinds(line), line).toEqual([]);
+    }
   });
 
   it('cloud connection strings', () => {
@@ -247,8 +278,19 @@ describe('generic assignment pattern', () => {
       'token: eleven-char',
       'The password reset flow is described below.',
       'auth: true',
+      'token: example',
+      'api_key: example-key-12345',
+      'password: REDACTED',
+      'secret: <redacted:aws>',
     ];
     for (const line of negatives) expect(kinds(line), line).toEqual([]);
+  });
+
+  it('placeholder words are anchored: a real value containing them is still flagged (SEC-F5)', () => {
+    expect(kinds('api_key: this_is_an_example_9fKq2LmZpQ7rT')).toEqual(['generic secret assignment']);
+    expect(kinds('password: real_redacted_lookalike_x8Kq2LmZ')).toEqual(['generic secret assignment']);
+    expect(kinds('token: not-a-placeholder-9fKq2LmZ')).toEqual(['generic secret assignment']);
+    expect(kinds('secret: myfake_9fKq2LmZpQ7rT')).toEqual(['generic secret assignment']);
   });
 });
 
@@ -282,13 +324,31 @@ describe('custom patterns, allow list, inline allow', () => {
     expect(scanText(text, '/repos/svc/research/x.md', { allow })).toEqual([]);
     // same masked prefix, different path → different fingerprint → still found
     expect(scanText(text, '/repos/svc/research/y.md', { allow })).toHaveLength(1);
-    // The fingerprint is sha256(path + kind + masked) per specs/15 and the contract, so
-    // a value whose masked form differs (here: a shorter value, fewer stars) is no
-    // longer covered by the entry. A change that keeps the same first 4 characters and
-    // the same 16-star cap keeps the same masked form and therefore the same fingerprint.
+    // The fingerprint binds path + kind + masked + sha256(raw value), so any change to the
+    // value — a different length (fewer stars) or the same masked form — invalidates the entry.
     const changed = 'key: sk_live_' + rep('9z', 5);
     expect(mask('sk_live_' + rep('9z', 5))).not.toBe((f as Finding).masked);
     expect(scanText(changed, '/repos/svc/research/x.md', { allow })).toHaveLength(1);
+  });
+
+  it('fingerprint binds the value: same path, kind, prefix and length still differ; moving lines does not (SEC-F4)', () => {
+    const p = '/repos/svc/research/x.md';
+    const a = 'sk_live_' + rep('b', 24);
+    const b = 'sk_live_' + rep('c', 24);
+    expect(mask(a)).toBe(mask(b));
+    const [fa] = scanText('key: ' + a, p);
+    const [fb] = scanText('key: ' + b, p);
+    expect(fa!.kind).toBe(fb!.kind);
+    expect(fa!.fingerprint).not.toBe(fb!.fingerprint);
+    const allow = [{ fingerprint: fa!.fingerprint, reason: 'documented example, revoked', by: 'human:me', at: '2026-09-09T00:00:00Z' }];
+    // allow-listed → suppressed
+    expect(scanText('key: ' + a, p, { allow })).toEqual([]);
+    // value replaced by another of identical length → finding returns
+    expect(scanText('key: ' + b, p, { allow })).toHaveLength(1);
+    // same value moved to another line → still suppressed
+    expect(scanText('# intro\n\nnotes\nkey: ' + a, p, { allow })).toEqual([]);
+    expect(JSON.stringify([fa, fb])).not.toContain(a);
+    expect(JSON.stringify([fa, fb])).not.toContain(b);
   });
 
   it('inline allow-secret with a non-empty reason suppresses the next line only', () => {
@@ -314,11 +374,12 @@ describe('scanText details', () => {
   });
 
   it('uses the display path verbatim (e.g. --set keys) and carries it into the fingerprint', () => {
-    const f = one('ghp_' + rep('a', 36)) as Finding;
-    const g = scanText('ghp_' + rep('a', 36), '--set token')[0] as Finding;
+    const tok = 'ghp_' + rep('a', 36);
+    const f = one(tok) as Finding;
+    const g = scanText(tok, '--set token')[0] as Finding;
     expect(g.path).toBe('--set token');
     expect(g.fingerprint).not.toBe(f.fingerprint);
-    expect(g.fingerprint).toBe(fingerprint('--set token', 'github token', g.masked));
+    expect(g.fingerprint).toBe(fingerprint('--set token', 'github token', g.masked, tok));
   });
 
   it('returns nothing for ordinary prose and empty input', () => {

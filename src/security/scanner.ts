@@ -36,17 +36,25 @@ export function mask(value: string): string {
   return value.slice(0, 4) + '*'.repeat(Math.min(value.length - 4, 16));
 }
 
-/** `sha256:` + hex of `path + "\n" + kind + "\n" + masked`. */
-export function fingerprint(p: string, kind: string, masked: string): string {
-  return 'sha256:' + createHash('sha256').update(p + '\n' + kind + '\n' + masked, 'utf8').digest('hex');
+/**
+ * `sha256:` + hex of `path + "\n" + kind + "\n" + masked + "\n" + hex(sha256(raw))`.
+ *
+ * Binding the raw value (hashed, never stored) means that changing a secret
+ * invalidates an allow-list entry even when the new value keeps the same
+ * masked form; the line number stays out so a value that moves keeps its
+ * fingerprint. `raw` is consumed in-process only.
+ */
+export function fingerprint(p: string, kind: string, masked: string, raw: string): string {
+  const rawHash = createHash('sha256').update(raw, 'utf8').digest('hex');
+  return 'sha256:' + createHash('sha256').update(p + '\n' + kind + '\n' + masked + '\n' + rawHash, 'utf8').digest('hex');
 }
 
 export function hasBlocking(findings: Finding[]): boolean {
   return findings.some((f) => f.severity === 'block' || f.severity === 'unscannable');
 }
 
-function makeFinding(p: string, line: number, kind: string, severity: Finding['severity'], masked: string): Finding {
-  return { path: p, line, kind, severity, masked, fingerprint: fingerprint(p, kind, masked) };
+function makeFinding(p: string, line: number, kind: string, severity: Finding['severity'], masked: string, raw: string): Finding {
+  return { path: p, line, kind, severity, masked, fingerprint: fingerprint(p, kind, masked, raw) };
 }
 
 // ---------------------------------------------------------------------------
@@ -90,6 +98,8 @@ interface LineHit {
   kind: string;
   severity: Finding['severity'];
   masked: string;
+  /** Raw matched value: consumed by `fingerprint` only, never copied onto a Finding. */
+  raw: string;
   span: Span;
 }
 
@@ -105,24 +115,28 @@ function runDetector(det: Detector, line: string, taken: Span[], out: LineHit[])
     if (overlaps(taken, span)) continue;
     if (det.valueGroup !== undefined) {
       const value = m[det.valueGroup] ?? '';
-      if (isPlaceholder(value)) continue;
+      if (isPlaceholder(value, det.strictPlaceholder === true)) continue;
     }
     let masked: string;
+    let raw: string;
     if (det.passwordGroup !== undefined) {
       // postgres://user:****@host — mask only the password part.
       const scheme = m[1] ?? '';
       const user = m[2] ?? '';
       const rest = m[4] ?? '';
       masked = scheme + user + ':****@' + rest;
-    } else if (det.valueGroup !== undefined) {
+      raw = m[det.passwordGroup] ?? m[0];
+    } else if (det.valueGroup !== undefined && !det.maskWhole) {
       // Assignment-style detectors (`aws_secret_access_key = …`, `password: …`):
       // the secret is the value, so mask that rather than the `key = ` prefix.
-      masked = mask(m[det.valueGroup] ?? m[0]);
+      raw = m[det.valueGroup] ?? m[0];
+      masked = mask(raw);
     } else {
-      masked = mask(m[0]);
+      raw = m[0];
+      masked = mask(raw);
     }
     taken.push(span);
-    out.push({ kind: det.kind, severity: det.severity, masked, span });
+    out.push({ kind: det.kind, severity: det.severity, masked, raw, span });
   }
 }
 
@@ -151,7 +165,7 @@ function scanLines(text: string, displayPath: string, opts: ScanOptions): Findin
       if (m && !isPlaceholder(m[1] as string)) {
         const span = { start: m.index, end: m.index + m[0].length };
         taken.push(span);
-        hits.push({ kind: SERVICE_ACCOUNT_KIND, severity: 'block', masked: mask(m[1] as string), span });
+        hits.push({ kind: SERVICE_ACCOUNT_KIND, severity: 'block', masked: mask(m[1] as string), raw: m[1] as string, span });
       }
     }
     for (const det of KNOWN_DETECTORS) runDetector(det, line, taken, hits);
@@ -162,7 +176,7 @@ function scanLines(text: string, displayPath: string, opts: ScanOptions): Findin
         const span = { start: hit.start, end: hit.end };
         if (overlaps(taken, span)) continue;
         taken.push(span);
-        hits.push({ kind: 'high entropy string', severity: 'warn', masked: mask(hit.value), span });
+        hits.push({ kind: 'high entropy string', severity: 'warn', masked: mask(hit.value), raw: hit.value, span });
       }
     }
     if (hits.length === 0) continue;
@@ -173,7 +187,7 @@ function scanLines(text: string, displayPath: string, opts: ScanOptions): Findin
     if (allow && (allow[1] ?? '').trim().length > 0) continue;
 
     hits.sort((a, b) => a.span.start - b.span.start);
-    for (const hit of hits) findings.push(makeFinding(displayPath, i + 1, hit.kind, hit.severity, hit.masked));
+    for (const hit of hits) findings.push(makeFinding(displayPath, i + 1, hit.kind, hit.severity, hit.masked, hit.raw));
   }
   return findings;
 }
@@ -207,14 +221,14 @@ async function isBinary(absPath: string): Promise<boolean> {
 /** Blocklist → size/binary → content. Missing files throw (callers that expect deletions use `scanFiles`). */
 export async function scanFile(absPath: string, displayPath: string, opts: ScanOptions = {}): Promise<Finding[]> {
   if (isBlockedFilename(displayPath) || isBlockedFilename(absPath)) {
-    return applyAllowList([makeFinding(displayPath, 0, 'blocked filename', 'block', '')], opts.allow);
+    return applyAllowList([makeFinding(displayPath, 0, 'blocked filename', 'block', '', '')], opts.allow);
   }
   const st = await fs.promises.stat(absPath);
   if (st.size > MAX_SCAN_BYTES) {
-    return applyAllowList([makeFinding(displayPath, 0, 'unscannable: larger than 1 MB', 'unscannable', '')], opts.allow);
+    return applyAllowList([makeFinding(displayPath, 0, 'unscannable: larger than 1 MB', 'unscannable', '', '')], opts.allow);
   }
   if (await isBinary(absPath)) {
-    return applyAllowList([makeFinding(displayPath, 0, 'unscannable: binary file', 'unscannable', '')], opts.allow);
+    return applyAllowList([makeFinding(displayPath, 0, 'unscannable: binary file', 'unscannable', '', '')], opts.allow);
   }
   const text = await fs.promises.readFile(absPath, 'utf8');
   return scanText(text, displayPath, opts);

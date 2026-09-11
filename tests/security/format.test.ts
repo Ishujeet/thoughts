@@ -38,7 +38,7 @@ describe('formatFindings', () => {
       kind: 'blocked filename',
       severity: 'block',
       masked: '',
-      fingerprint: fingerprint('/repos/svc/research/.env', 'blocked filename', ''),
+      fingerprint: fingerprint('/repos/svc/research/.env', 'blocked filename', '', ''),
     };
     const out = formatFindings([blocked], { verb: 'create' });
     expect(out.split('\n').slice(0, 4)).toEqual(['✗ secret found — refusing to create', '', '  repos/svc/research/.env', '    blocked filename       ']);

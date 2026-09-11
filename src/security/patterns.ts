@@ -29,13 +29,24 @@ export interface Detector {
   valueGroup?: number;
   /** Connection string: mask only the password (group `passwordGroup`). */
   passwordGroup?: number;
+  /** Mask the whole match even when `valueGroup` is set (the value is only used for the placeholder check). */
+  maskWhole?: boolean;
+  /**
+   * Only structural placeholders (`<…>`, `${…}`, `xxx`, `***`, …) exempt the
+   * value; a password inside a fully formed URL that merely starts with a word
+   * such as `example` is still reported.
+   */
+  strictPlaceholder?: boolean;
 }
 
 // ---------------------------------------------------------------------------
-// Placeholders (spec 15 "3."): never flagged.
+// Placeholders (spec 15 "3."): never flagged. Every pattern is anchored to the
+// whole value or its start: a real secret that merely contains a word such as
+// `example` or `redacted` somewhere inside must still be flagged.
 // ---------------------------------------------------------------------------
 
-const PLACEHOLDER_PATTERNS: readonly RegExp[] = [
+/** Placeholders recognised by their shape; these apply everywhere, including URL passwords. */
+const STRUCTURAL_PLACEHOLDER_PATTERNS: readonly RegExp[] = [
   /^<.*>$/, // <your-password>
   /^\$\{.*\}$/, // ${API_TOKEN}
   /^\$[A-Za-z_][A-Za-z0-9_]*$/, // $API_TOKEN
@@ -46,21 +57,30 @@ const PLACEHOLDER_PATTERNS: readonly RegExp[] = [
   /^[-_.]+$/, // ------------
   /^changeme/i,
   /^change[-_]?me/i,
-  /example/i,
   /^your[-_].*[-_]here$/i,
-  /^your[-_]/i,
-  /redacted/i,
-  /^placeholder/i,
-  /^(?:dummy|sample|fake)[-_]?/i,
+  /^redacted(?:[-_.\s]|$)/i, // REDACTED, REDACTED_BY_SECURITY — never a mid-value substring
   /^<redacted:.*>$/i,
   /^(?:null|none|undefined|true|false)$/i,
 ];
 
-/** True when `value` is an obvious placeholder or is shorter than 12 characters. */
-export function isPlaceholder(value: string): boolean {
+/** Placeholders recognised by a leading word (`example-key`, `your-token`, `dummy_secret`). */
+const WORD_PLACEHOLDER_PATTERNS: readonly RegExp[] = [
+  /^example/i,
+  /^your[-_]/i,
+  /^placeholder/i,
+  /^(?:dummy|sample|fake)[-_]?/i,
+];
+
+const PLACEHOLDER_PATTERNS: readonly RegExp[] = [...STRUCTURAL_PLACEHOLDER_PATTERNS, ...WORD_PLACEHOLDER_PATTERNS];
+
+/**
+ * True when `value` is an obvious placeholder or is shorter than 12 characters.
+ * With `strict`, only structural placeholders count (see `Detector.strictPlaceholder`).
+ */
+export function isPlaceholder(value: string, strict = false): boolean {
   const v = value.trim().replace(/^['"`]|['"`]$/g, '');
   if (v.length < 12) return true;
-  return PLACEHOLDER_PATTERNS.some((p) => p.test(v));
+  return (strict ? STRUCTURAL_PLACEHOLDER_PATTERNS : PLACEHOLDER_PATTERNS).some((p) => p.test(v));
 }
 
 // ---------------------------------------------------------------------------
@@ -116,6 +136,18 @@ export const KNOWN_DETECTORS: readonly Detector[] = [
     regex: /(?<![A-Za-z0-9])((?:jdbc:)?(?:postgres|postgresql|mysql|mariadb|mongodb(?:\+srv)?|redis|rediss|amqp|amqps|mssql|sqlserver):\/\/)([^:\/\s@'"]+):([^@\s'"]+)@([^\s'"`)>\]]+)/gi,
     passwordGroup: 3,
     valueGroup: 3,
+    strictPlaceholder: true,
+  },
+  {
+    // Any other `scheme://user:password@host` (http, https, git, ssh, …). The db
+    // schemes above win on overlap; the whole URL is masked so nothing of the
+    // credential leaks. `user@host` without a password never matches.
+    kind: 'url credentials',
+    severity: 'block',
+    regex: /(?<![A-Za-z0-9+.-])([a-z][a-z0-9+.-]*:\/\/)([^:\/\s@'"]+):([^@\s'"]+)@([^\s'"`)>\]]+)/gi,
+    valueGroup: 3,
+    maskWhole: true,
+    strictPlaceholder: true,
   },
   {
     kind: 'azure storage connection string',

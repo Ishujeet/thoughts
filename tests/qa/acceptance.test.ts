@@ -381,7 +381,7 @@ describe('specs/03 sync: secrets (specs/15)', () => {
     write(r.absPath, read(r.absPath) + `\nkey: ${key}\n`);
     const e = await secretError(() => runSync({ push: false, now }, repo));
     const f = e.findings[0]!;
-    expect(f.fingerprint).toBe(fingerprint(r.path, 'stripe secret key', mask(key)));
+    expect(f.fingerprint).toBe(fingerprint(r.path, 'stripe secret key', mask(key), key));
     expect(f.fingerprint).toMatch(/^sha256:[0-9a-f]{64}$/);
 
     write(

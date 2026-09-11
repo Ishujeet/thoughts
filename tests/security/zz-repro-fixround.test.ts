@@ -4,7 +4,7 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { loadRepoConfig } from '../../src/brain/config.js';
 import { loadAllowList } from '../../src/security/allowlist.js';
-import { scanText, fingerprint } from '../../src/security/scanner.js';
+import { scanText } from '../../src/security/scanner.js';
 
 const rep = (s: string, n: number) => s.repeat(n);
 
