@@ -1,0 +1,86 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 490" width="1000" height="490" role="img" aria-labelledby="brain-layout-t brain-layout-d">
+<title id="brain-layout-t">Brain repository layout</title>
+<desc id="brain-layout-d">Directory tree of a brain repository with its three zones: shared, repos, and users.</desc>
+<style>
+text{font-family:ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif}
+.m{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace}
+.b{font-weight:600}.bb{font-weight:700}
+.ink{fill:#0f172a}.mut{fill:#5b6b7f}
+.card{fill:#ffffff;stroke:#d7dee7;stroke-width:1.25}
+.card2{fill:#f7f9fb;stroke:#e3e9f0;stroke-width:1.25}
+.dash{fill:none;stroke:#c4cedb;stroke-width:1.25;stroke-dasharray:4 4}
+.ln{fill:none;stroke:#c4cedb;stroke-width:1.5}
+.vi{fill:#5733e8}.vis{fill:#f1edff;stroke:#cabcff;stroke-width:1.25}
+.vil{fill:none;stroke:#8b6cff;stroke-width:1.5}.vif{fill:#8b6cff}
+.bl{fill:#1558c0}.bls{fill:#eaf2ff;stroke:#bcd8ff;stroke-width:1.25}
+.gr{fill:#076a48}.grs{fill:#e5f7ef;stroke:#a5e2c9;stroke-width:1.25}
+.ro{fill:#b52348}.ros{fill:#fdecf0;stroke:#f6bdcb;stroke-width:1.25}
+.rof{fill:#d32d56}
+@media (prefers-color-scheme:dark){
+.ink{fill:#e6edf3}.mut{fill:#9aa7b4}
+.card{fill:#161b22;stroke:#30363d}
+.card2{fill:#1b212b;stroke:#2b323d}
+.dash{stroke:#3d4654}.ln{stroke:#3d4654}
+.vi{fill:#c3b2ff}.vis{fill:#231c3c;stroke:#4a3a86}.vil{stroke:#7c63d8}.vif{fill:#9d86ff}
+.bl{fill:#8cc0ff}.bls{fill:#15243c;stroke:#2b4b7d}
+.gr{fill:#43c894}.grs{fill:#0f2a21;stroke:#275844}
+.ro{fill:#ff9aae}.ros{fill:#331620;stroke:#6d2b41}.rof{fill:#ff8098}
+}
+</style>
+<text class="ink b" x="44" y="54" font-size="15">The brain is an ordinary git repository</text>
+<text class="mut" x="44" y="76" font-size="12">Markdown with YAML frontmatter. Readable with cat, diffable with git.</text>
+<path class="ln" stroke-width="1.25" d="M59,116.5 L59,419.5"/>
+<path class="ln" stroke-width="1.25" d="M59,133.5 L70,133.5"/>
+<path class="ln" stroke-width="1.25" d="M59,159.5 L70,159.5"/>
+<path class="ln" stroke-width="1.25" d="M59,185.5 L70,185.5"/>
+<path class="ln" stroke-width="1.25" d="M59,211.5 L70,211.5"/>
+<path class="ln" stroke-width="1.25" d="M59,237.5 L70,237.5"/>
+<path class="ln" stroke-width="1.25" d="M59,263.5 L70,263.5"/>
+<path class="ln" stroke-width="1.25" d="M59,419.5 L70,419.5"/>
+<path class="ln" stroke-width="1.25" d="M83,272.5 L83,393.5"/>
+<path class="ln" stroke-width="1.25" d="M83,289.5 L94,289.5"/>
+<path class="ln" stroke-width="1.25" d="M83,393.5 L94,393.5"/>
+<path class="ln" stroke-width="1.25" d="M107,298.5 L107,367.5"/>
+<path class="ln" stroke-width="1.25" d="M107,315.5 L118,315.5"/>
+<path class="ln" stroke-width="1.25" d="M107,341.5 L118,341.5"/>
+<path class="ln" stroke-width="1.25" d="M107,367.5 L118,367.5"/>
+<path class="ln" stroke-width="1.25" d="M83,428.5 L83,445.5"/>
+<path class="ln" stroke-width="1.25" d="M83,445.5 L94,445.5"/>
+<text class="m vi b" x="52" y="112" font-size="12.5">acme-checkout/</text>
+<text class="mut" x="350" y="112" font-size="11">the brain</text>
+<text class="m ink" x="76" y="138" font-size="12.5">brain.yml</text>
+<text class="mut" x="350" y="138" font-size="11">config + repo roster</text>
+<text class="m ink" x="76" y="164" font-size="12.5">index.md, log.md</text>
+<text class="mut" x="350" y="164" font-size="11">generated, never edited</text>
+<text class="m ink" x="76" y="190" font-size="12.5">templates/</text>
+<text class="mut" x="350" y="190" font-size="11">plan, spec, research, pr</text>
+<text class="m ink" x="76" y="216" font-size="12.5">standard/</text>
+<text class="mut" x="350" y="216" font-size="11">the kit installed into repos</text>
+<text class="m vi b" x="76" y="242" font-size="12.5">shared/</text>
+<text class="mut" x="350" y="242" font-size="11">ZONE · cross-repo thoughts</text>
+<text class="m vi b" x="76" y="268" font-size="12.5">repos/</text>
+<text class="mut" x="350" y="268" font-size="11">ZONE · one dir per code repo</text>
+<text class="m ink" x="100" y="294" font-size="12.5">payments-api/</text>
+<text class="m ink" x="124" y="320" font-size="12.5">specs/</text>
+<text class="m ink" x="124" y="346" font-size="12.5">plans/</text>
+<text class="m ink" x="124" y="372" font-size="12.5">decisions/</text>
+<text class="m ink" x="100" y="398" font-size="12.5">orders-service/</text>
+<text class="m vi b" x="76" y="424" font-size="12.5">users/</text>
+<text class="mut" x="350" y="424" font-size="11">ZONE · personal scratch</text>
+<text class="m ink" x="100" y="450" font-size="12.5">ishujeet/</text>
+<rect class="card" x="624" y="110" width="336" height="96" rx="12"/>
+<rect class="vi" x="624" y="126" width="3.5" height="64" rx="2" opacity="0.9"/>
+<text class="m vi b" x="648" y="142" font-size="13">shared/</text>
+<text class="mut" x="648" y="166" font-size="11.5">Decisions and specs that belong to the project,</text>
+<text class="mut" x="648" y="184" font-size="11.5">not to any single repo. Cross-repo ADRs live here.</text>
+<rect class="card" x="624" y="234" width="336" height="96" rx="12"/>
+<rect class="bl" x="624" y="250" width="3.5" height="64" rx="2" opacity="0.9"/>
+<text class="m bl b" x="648" y="266" font-size="13">repos/&lt;id&gt;/</text>
+<text class="mut" x="648" y="290" font-size="11.5">One directory per code repo. That repo writes here</text>
+<text class="mut" x="648" y="308" font-size="11.5">and nowhere else, so blame and review stay clean.</text>
+<rect class="card" x="624" y="358" width="336" height="96" rx="12"/>
+<rect class="gr" x="624" y="374" width="3.5" height="64" rx="2" opacity="0.9"/>
+<text class="m gr b" x="648" y="390" font-size="13">users/&lt;me&gt;/</text>
+<text class="mut" x="648" y="414" font-size="11.5">Personal scratch, still shared with everyone.</text>
+<text class="mut" x="648" y="432" font-size="11.5">Half-formed thinking is context too.</text>
+</svg>

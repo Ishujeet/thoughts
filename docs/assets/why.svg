@@ -1,0 +1,79 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 380" width="1000" height="380" role="img" aria-labelledby="why-t why-d">
+<title id="why-t">Why thoughts exists</title>
+<desc id="why-d">Left: three repositories with three disconnected contexts. Right: the same three repositories sharing one brain.</desc>
+<style>
+text{font-family:ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif}
+.m{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace}
+.b{font-weight:600}.bb{font-weight:700}
+.ink{fill:#0f172a}.mut{fill:#5b6b7f}
+.card{fill:#ffffff;stroke:#d7dee7;stroke-width:1.25}
+.card2{fill:#f7f9fb;stroke:#e3e9f0;stroke-width:1.25}
+.dash{fill:none;stroke:#c4cedb;stroke-width:1.25;stroke-dasharray:4 4}
+.ln{fill:none;stroke:#c4cedb;stroke-width:1.5}
+.vi{fill:#5733e8}.vis{fill:#f1edff;stroke:#cabcff;stroke-width:1.25}
+.vil{fill:none;stroke:#8b6cff;stroke-width:1.5}.vif{fill:#8b6cff}
+.bl{fill:#1558c0}.bls{fill:#eaf2ff;stroke:#bcd8ff;stroke-width:1.25}
+.gr{fill:#076a48}.grs{fill:#e5f7ef;stroke:#a5e2c9;stroke-width:1.25}
+.ro{fill:#b52348}.ros{fill:#fdecf0;stroke:#f6bdcb;stroke-width:1.25}
+.rof{fill:#d32d56}
+@media (prefers-color-scheme:dark){
+.ink{fill:#e6edf3}.mut{fill:#9aa7b4}
+.card{fill:#161b22;stroke:#30363d}
+.card2{fill:#1b212b;stroke:#2b323d}
+.dash{stroke:#3d4654}.ln{stroke:#3d4654}
+.vi{fill:#c3b2ff}.vis{fill:#231c3c;stroke:#4a3a86}.vil{stroke:#7c63d8}.vif{fill:#9d86ff}
+.bl{fill:#8cc0ff}.bls{fill:#15243c;stroke:#2b4b7d}
+.gr{fill:#43c894}.grs{fill:#0f2a21;stroke:#275844}
+.ro{fill:#ff9aae}.ros{fill:#331620;stroke:#6d2b41}.rof{fill:#ff8098}
+}
+</style>
+<rect class="card" x="20" y="24" width="460" height="336" rx="14"/>
+<rect class="card" x="520" y="24" width="460" height="336" rx="14"/>
+<text class="ro b" x="48" y="58" font-size="14.5">Without a brain</text>
+<text class="gr b" x="548" y="58" font-size="14.5">With thoughts</text>
+<rect class="card2" x="48" y="100" width="120" height="64" rx="11" stroke-dasharray="4 4"/>
+<circle class="mut" cx="108" cy="124" r="5" opacity="0.55"/>
+<text class="mut" x="108" y="147" font-size="11" text-anchor="middle">sees 1 of 3</text>
+<path class="dash" d="M108,164 L108,200"/>
+<rect class="card2" x="48" y="200" width="120" height="44" rx="9"/>
+<text class="ink" x="108" y="227" font-size="11.5" text-anchor="middle">payments-api</text>
+<rect class="card2" x="190" y="100" width="120" height="64" rx="11" stroke-dasharray="4 4"/>
+<circle class="mut" cx="250" cy="124" r="5" opacity="0.55"/>
+<text class="mut" x="250" y="147" font-size="11" text-anchor="middle">sees 1 of 3</text>
+<path class="dash" d="M250,164 L250,200"/>
+<rect class="card2" x="190" y="200" width="120" height="44" rx="9"/>
+<text class="ink" x="250" y="227" font-size="11.5" text-anchor="middle">orders-service</text>
+<rect class="card2" x="332" y="100" width="120" height="64" rx="11" stroke-dasharray="4 4"/>
+<circle class="mut" cx="392" cy="124" r="5" opacity="0.55"/>
+<text class="mut" x="392" y="147" font-size="11" text-anchor="middle">sees 1 of 3</text>
+<path class="dash" d="M392,164 L392,200"/>
+<rect class="card2" x="332" y="200" width="120" height="44" rx="9"/>
+<text class="ink" x="392" y="227" font-size="11.5" text-anchor="middle">notifications</text>
+<text class="mut" x="250" y="280" font-size="12.5" text-anchor="middle">Three repos, three partial views.</text>
+<rect class="ros" x="48" y="302" width="122" height="26" rx="13"/>
+<text class="ro" x="109.0" y="319" font-size="11" text-anchor="middle">duplicated work</text>
+<rect class="ros" x="184" y="302" width="134" height="26" rx="13"/>
+<text class="ro" x="251.0" y="319" font-size="11" text-anchor="middle">drifting contracts</text>
+<rect class="ros" x="332" y="302" width="116" height="26" rx="13"/>
+<text class="ro" x="390.0" y="319" font-size="11" text-anchor="middle">lost decisions</text>
+<rect class="vis" x="684" y="100" width="132" height="64" rx="12"/>
+<path class="vil" d="M714,130 L701.6,120.08 M714,130 L726.4,120.08 M714,130 L714,143.64" opacity="0.65"/><circle class="vif" cx="701.6" cy="120.08" r="2.604"/><circle class="vif" cx="726.4" cy="120.08" r="2.604"/><circle class="vif" cx="714" cy="143.64" r="2.604"/><circle class="vif" cx="714" cy="130" r="4.96"/>
+<text class="vi b" x="742" y="127" font-size="12.5">brain</text>
+<text class="mut" x="742" y="143" font-size="10.5">git repo</text>
+<path class="vil" d="M700,164 C700,190 608,178 608,200" opacity="0.7"/>
+<path class="vil" d="M750,164 L750,200" opacity="0.7"/>
+<path class="vil" d="M800,164 C800,190 892,178 892,200" opacity="0.7"/>
+<rect class="card2" x="548" y="200" width="120" height="44" rx="9"/>
+<text class="ink" x="608" y="227" font-size="11.5" text-anchor="middle">payments-api</text>
+<rect class="card2" x="690" y="200" width="120" height="44" rx="9"/>
+<text class="ink" x="750" y="227" font-size="11.5" text-anchor="middle">orders-service</text>
+<rect class="card2" x="832" y="200" width="120" height="44" rx="9"/>
+<text class="ink" x="892" y="227" font-size="11.5" text-anchor="middle">notifications</text>
+<text class="mut" x="750" y="280" font-size="12.5" text-anchor="middle">Three repos, one shared context.</text>
+<rect class="grs" x="548" y="302" width="128" height="26" rx="13"/>
+<text class="gr" x="612.0" y="319" font-size="11" text-anchor="middle">shared decisions</text>
+<rect class="grs" x="690" y="302" width="112" height="26" rx="13"/>
+<text class="gr" x="746.0" y="319" font-size="11" text-anchor="middle">aligned specs</text>
+<rect class="grs" x="816" y="302" width="128" height="26" rx="13"/>
+<text class="gr" x="880.0" y="319" font-size="11" text-anchor="middle">cross-repo plans</text>
+</svg>

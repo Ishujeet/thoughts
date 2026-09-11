@@ -4,14 +4,16 @@
   "description": "Attach a shared, git-backed brain to every repo in a multi-repo project.",
   "private": true,
   "type": "module",
-  "license": "UNLICENSED",
+  "license": "Apache-2.0",
   "bin": {
     "thoughts": "./dist/index.js"
   },
   "files": [
     "dist",
     "templates",
-    "kit"
+    "kit",
+    "LICENSE",
+    "NOTICE"
   ],
   "engines": {
     "node": ">=22"
