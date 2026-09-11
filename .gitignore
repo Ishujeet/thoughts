@@ -6,3 +6,4 @@ coverage/
 
 # local agent tooling, not part of the project
 .claude/
+/thoughts

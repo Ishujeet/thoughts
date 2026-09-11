@@ -165,6 +165,20 @@ function isEmptyDir(p: string): boolean {
   }
 }
 
+/**
+ * The CLI-owned clone directory is usable when it is missing, empty, or already
+ * a brain clone. Anything else is a foreign directory in the way, and only the
+ * user can decide what happens to it.
+ */
+function assertUsableCloneDir(brainRoot: string): void {
+  if (!fs.existsSync(brainRoot)) return;
+  if (isEmptyDir(brainRoot)) return;
+  if (fs.existsSync(path.join(brainRoot, BRAIN_CONFIG_FILENAME))) return;
+  throw new ThoughtsError(`${brainRoot} exists but is not a brain clone`, ExitCode.FsConflict, {
+    hint: `move it away or delete it (rm -rf ${brainRoot}), then re-run: thoughts init`,
+  });
+}
+
 function readIfExists(p: string): string | undefined {
   try {
     return fs.readFileSync(p, 'utf8');
@@ -231,7 +245,16 @@ async function resolveBrainRef(ref: string, fromRepoConfig: boolean): Promise<Br
           hint: 'point --brain at an existing brain repository, or at a new (empty) path to create one',
         });
       }
-      return { remote: abs, brainId, localNonBare: !(await git.isBareRepo(abs)) };
+      const bare = await git.isBareRepo(abs);
+      // Refuse a checked-out non-brain here rather than after cloning it: the
+      // clone would only be thrown away, and the message names the path the
+      // user typed instead of the CLI-owned clone.
+      if (!bare && !fs.existsSync(path.join(abs, BRAIN_CONFIG_FILENAME))) {
+        throw new ThoughtsError(`${abs} is a git repository but not a brain: ${BRAIN_CONFIG_FILENAME} is missing`, ExitCode.Validation, {
+          hint: 'create a brain at a new (empty) path, then push it; or point --brain at an existing brain',
+        });
+      }
+      return { remote: abs, brainId, localNonBare: !bare };
     }
     if (fromRepoConfig) {
       throw new ThoughtsError(`brain path from ${REPO_CONFIG_FILENAME} does not exist: ${abs}`, ExitCode.RemoteUnreachable, {
@@ -356,6 +379,9 @@ export async function runInit(opts: InitOptions, cwd: string): Promise<InitResul
   const { brainId, remote } = brainRef;
   const shownRemote = redactUrlCredentials(remote);
   const brainRoot = brainCloneDir(brainId);
+  // Before anything is written: a foreign directory where the clone belongs
+  // must fail here, not after a new brain has been scaffolded at `--brain <path>`.
+  assertUsableCloneDir(brainRoot);
   let brainCreated = false;
   if (brainRef.createAt) {
     if (write) {
@@ -383,19 +409,20 @@ export async function runInit(opts: InitOptions, cwd: string): Promise<InitResul
     } else {
       report(steps, `brain clone ${brainRoot}`, 'up-to-date');
     }
-  } else if (fs.existsSync(brainRoot) && !isEmptyDir(brainRoot)) {
-    throw new ThoughtsError(`${brainRoot} exists but is not a brain clone`, ExitCode.FsConflict, {
-      hint: 'move it away (or run: thoughts doctor --reclone), then re-run: thoughts init',
-    });
   } else if (write) {
+    assertUsableCloneDir(brainRoot);
     if (isEmptyDir(brainRoot)) fs.rmdirSync(brainRoot);
     fs.mkdirSync(brainsDir(), { recursive: true });
     try {
       await git.clone(remote, brainRoot);
     } catch (err) {
+      // Whatever a partial clone left behind is ours to remove: kept, it looks
+      // like a foreign directory and blocks every later `init` for this brain.
+      fs.rmSync(brainRoot, { recursive: true, force: true });
       throw translateGitError(err, 'clone', remote);
     }
     if (!fs.existsSync(path.join(brainRoot, BRAIN_CONFIG_FILENAME))) {
+      fs.rmSync(brainRoot, { recursive: true, force: true });
       throw new ThoughtsError(`${shownRemote} is not a brain: ${BRAIN_CONFIG_FILENAME} is missing`, ExitCode.Validation, {
         hint: 'point --brain at a brain repository, or at a new (empty) path to create one',
       });

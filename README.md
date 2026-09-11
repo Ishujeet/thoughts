@@ -128,7 +128,15 @@ git remote add origin git@github.com:acme/acme-brain.git
 git push -u origin HEAD
 ```
 
-A git URL has to point at a repository that is already a brain. Cloning a new empty one fails with `brain.yml is missing`, which is why the first brain is created from a path.
+A git URL has to point at a repository that is already a brain. Cloning one that is not fails with `brain.yml is missing`, which is why the first brain is created from a path.
+
+The path has to be new or empty. If your host created the remote with a README (Azure DevOps and GitHub both offer to), do not clone it and point `--brain` at the clone: that directory is a git repository without a `brain.yml`, and `init` refuses it. Create the brain at a fresh path as above, then push over the placeholder commit:
+
+```bash
+cd ~/code/acme-brain
+git remote add origin <url>
+git push -u origin HEAD --force   # only for that first push, over the host's README commit
+```
 
 Then work as normal:
 
@@ -396,7 +404,21 @@ Someone else on your team ran `thoughts init` and committed `.thoughts.yml`, but
 <details>
 <summary><code>&lt;url&gt; is not a brain: brain.yml is missing</code></summary>
 
-You pointed `--brain` at a git URL for a repository that exists but has never been set up as a brain, most often a freshly created empty one. Create the brain from a local path first, then push it and share the URL. See [Attach your first repo](#attach-your-first-repo).
+You pointed `--brain` at a git URL for a repository that exists but has never been set up as a brain, most often a freshly created one holding only a README. Create the brain from a local path first, then push it and share the URL. See [Attach your first repo](#attach-your-first-repo).
+
+</details>
+
+<details>
+<summary><code>~/.thoughts/brains/&lt;id&gt; exists but is not a brain clone</code></summary>
+
+Something that is not a brain occupies the directory the CLI keeps its clone in. Look at it, then remove it and re-run `init`:
+
+```bash
+ls -la ~/.thoughts/brains/<id>
+rm -rf ~/.thoughts/brains/<id>
+```
+
+Nothing in that directory is yours to lose: it is a clone, and `thoughts init` recreates it from the brain's remote.
 
 </details>
 

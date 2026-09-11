@@ -83,6 +83,9 @@ Each step is a separate, reportable unit. `--dry-run` prints the plan without to
 2. Else if `--brain` given, use it.
 3. Else prompt: pick from brains in global config, or enter a remote URL, or **create a new brain** (creates an empty repo with `brain.yml`, `index.md`, and zone directories, and offers to push it).
 4. Clone to `~/.thoughts/brains/<brain-id>/` if not already present; otherwise fetch.
+   - The clone directory MUST be checked **before** step 3 creates anything: if it exists, is non-empty, and holds no `brain.yml`, `init` fails (exit 3) naming the directory and the command that clears it. A run MUST NOT scaffold a new brain and then abort on this.
+   - A clone that fails, or that turns out to hold no `brain.yml`, MUST be removed again before `init` exits. Leaving it behind makes every later `init` for that brain fail on the check above.
+   - A local `--brain <path>` that is a checked-out git repository without a `brain.yml` MUST be refused before cloning, naming the path the user gave.
 5. Install the secret-scanning `pre-commit` hook in the brain clone ([15-secret-scanning.md](15-secret-scanning.md)). This clone is CLI-owned, so the hook is always installed and re-installed if missing; it is not subject to the opt-in rule for code-repo hooks.
 
 ### 2. Register the repo

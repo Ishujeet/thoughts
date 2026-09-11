@@ -213,6 +213,42 @@ describe('init exit codes', () => {
     expect(ok.steps.find((s) => s.step.startsWith('thoughts →'))?.state).toBe('updated');
   });
 
+  it('a non-brain target fails without leaving a half-clone behind, so the next init is not blocked', async () => {
+    const repo = await makeCodeRepo(path.join(m.root, 'r'));
+    // A git repository that has never been set up as a brain: the freshly
+    // created remote (a README and nothing else) every host hands you.
+    const notBrain = await makeCodeRepo(path.join(m.root, 'not-a-brain'));
+
+    const byPath = await expectThoughtsError(() => runInit({ yes: true, brain: notBrain }, repo));
+    expect(byPath.exitCode).toBe(ExitCode.Validation);
+    expect(byPath.message).toContain('is a git repository but not a brain');
+    expect(fs.existsSync(brainCloneDir('not-a-brain'))).toBe(false);
+
+    const byUrl = await expectThoughtsError(() => runInit({ yes: true, brain: 'file://' + notBrain }, repo));
+    expect(byUrl.exitCode).toBe(ExitCode.Validation);
+    expect(byUrl.message).toContain('is not a brain');
+    expect(fs.existsSync(brainCloneDir('not-a-brain'))).toBe(false);
+
+    // Having failed twice, the same repo still attaches to a real brain.
+    const ok = await runInit({ yes: true, brain: path.join(m.root, 'acme-brain') }, repo);
+    expect(ok.brainId).toBe('acme-brain');
+  });
+
+  it('3: a foreign directory where the brain clone belongs fails before anything is created', async () => {
+    const repo = await makeCodeRepo(path.join(m.root, 'r'));
+    write(path.join(brainCloneDir('acme-brain'), 'someone-elses.txt'), 'not a brain\n');
+    const brainPath = path.join(m.root, 'acme-brain');
+
+    const e = await expectThoughtsError(() => runInit({ yes: true, brain: brainPath }, repo));
+    expect(e.exitCode).toBe(ExitCode.FsConflict);
+    expect(e.hint).toContain(brainCloneDir('acme-brain'));
+    // The hint names a command that exists today, not `thoughts doctor`.
+    expect(e.hint).not.toContain('doctor');
+    // And the run stopped before scaffolding a brain at --brain <path>.
+    expect(fs.existsSync(brainPath)).toBe(false);
+    expect(read(path.join(brainCloneDir('acme-brain'), 'someone-elses.txt'))).toBe('not a brain\n');
+  });
+
   it('7: a secret in the config being written is refused, masked', async () => {
     await runInit({ yes: true, brain: path.join(m.root, 'b') }, await makeCodeRepo(path.join(m.root, 'seed')));
     const repo = await makeCodeRepo(path.join(m.root, 'r'));
