@@ -62,14 +62,50 @@ The brain is a symlink, and it is gitignored. Nothing about how your repo builds
 
 ### Install
 
-Not published to npm yet. Install from source:
+Not published to npm yet. Build from source:
 
 ```bash
 git clone https://github.com/Ishujeet/thoughts.git
 cd thoughts
 npm install
 npm run build
-npm link          # puts `thoughts` on your PATH
+```
+
+That produces an executable at `dist/index.js` with its own shebang. Put it on your `PATH` in whichever way suits your machine.
+
+**Without admin rights (recommended).** Symlink the binary into a directory you own. No npm involved, so nothing can hit a permissions error:
+
+```bash
+mkdir -p ~/.local/bin
+ln -sf "$PWD/dist/index.js" ~/.local/bin/thoughts
+
+# once, if ~/.local/bin is not already on PATH
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc && exec $SHELL
+```
+
+**With `npm link`.** This writes into your global npm prefix. If Node was installed system-wide, that directory belongs to root and the link fails with `EACCES: permission denied`. Point npm at a prefix you own, once, and it works from then on:
+
+```bash
+npm config set prefix ~/.npm-global
+echo 'export PATH="$HOME/.npm-global/bin:$PATH"' >> ~/.zshrc && exec $SHELL
+npm link
+```
+
+A version manager such as [fnm](https://github.com/Schniz/fnm), [nvm](https://github.com/nvm-sh/nvm), or [Volta](https://volta.sh) gives you a user-owned global directory as a side effect, so `npm link` and `npm i -g` never need `sudo` again.
+
+**Without installing anything.** Run it where it was built:
+
+```bash
+node ~/code/thoughts/dist/index.js --help
+alias thoughts='node ~/code/thoughts/dist/index.js'
+```
+
+Avoid `sudo npm link`. It leaves root-owned files in your npm tree and breaks later installs as your normal user.
+
+Check it worked:
+
+```bash
+thoughts --version
 ```
 
 ### Attach your first repo
@@ -315,6 +351,29 @@ Specs are the source of truth. Code follows them, and when the two disagree, one
 | 13 | [`attach-all`](specs/13-cli-attach-all.md) | Bootstrapping a whole project on a new machine |
 | 14 | [`worktree`](specs/14-cli-worktree.md) | Several features at once on one repo |
 | 15 | [Secret scanning](specs/15-secret-scanning.md) | Detectors, allow-listing, recovery |
+
+## Troubleshooting
+
+<details>
+<summary><code>npm error code EACCES</code> when running <code>npm link</code></summary>
+
+Your global npm prefix is a system directory such as `/usr/local/lib/node_modules`, which your user cannot write to. Nothing is wrong with the build. Either symlink `dist/index.js` into `~/.local/bin` yourself, or set a user-owned npm prefix. Both are in [Install](#install). Do not reach for `sudo`.
+
+</details>
+
+<details>
+<summary><code>This repo is attached to brain &lt;name&gt; but not initialised on this machine</code></summary>
+
+Someone else on your team ran `thoughts init` and committed `.thoughts.yml`, but you have not initialised the repo on your own machine, so the `thoughts/` symlink and the local brain clone do not exist yet. Run `thoughts init`. It will not ask you for the brain or the repo id, because both come from the committed file.
+
+</details>
+
+<details>
+<summary>A command exits 7 and prints a masked value</summary>
+
+The scanner found something that looks like a credential and refused to write. Edit the line it names. If the value is genuinely not a secret, allow-list that one finding with a reason. If it was a real credential, rotate it first. See [Secret scanning](#secret-scanning).
+
+</details>
 
 ## Development
 
