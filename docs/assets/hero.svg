@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 280" width="1000" height="280" role="img" aria-labelledby="hero-t hero-d">
+<title id="hero-t">thoughts</title>
+<desc id="hero-d">Three code repositories each linked to one shared brain repository.</desc>
+<style>
+text{font-family:ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif}
+.m{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace}
+.b{font-weight:600}.bb{font-weight:700}
+.ink{fill:#0f172a}.mut{fill:#5b6b7f}
+.card{fill:#ffffff;stroke:#d7dee7;stroke-width:1.25}
+.card2{fill:#f7f9fb;stroke:#e3e9f0;stroke-width:1.25}
+.dash{fill:none;stroke:#c4cedb;stroke-width:1.25;stroke-dasharray:4 4}
+.ln{fill:none;stroke:#c4cedb;stroke-width:1.5}
+.vi{fill:#5733e8}.vis{fill:#f1edff;stroke:#cabcff;stroke-width:1.25}
+.vil{fill:none;stroke:#8b6cff;stroke-width:1.5}.vif{fill:#8b6cff}
+.bl{fill:#1558c0}.bls{fill:#eaf2ff;stroke:#bcd8ff;stroke-width:1.25}
+.gr{fill:#076a48}.grs{fill:#e5f7ef;stroke:#a5e2c9;stroke-width:1.25}
+.ro{fill:#b52348}.ros{fill:#fdecf0;stroke:#f6bdcb;stroke-width:1.25}
+.rof{fill:#d32d56}
+@media (prefers-color-scheme:dark){
+.ink{fill:#e6edf3}.mut{fill:#9aa7b4}
+.card{fill:#161b22;stroke:#30363d}
+.card2{fill:#1b212b;stroke:#2b323d}
+.dash{stroke:#3d4654}.ln{stroke:#3d4654}
+.vi{fill:#c3b2ff}.vis{fill:#231c3c;stroke:#4a3a86}.vil{stroke:#7c63d8}.vif{fill:#9d86ff}
+.bl{fill:#8cc0ff}.bls{fill:#15243c;stroke:#2b4b7d}
+.gr{fill:#43c894}.grs{fill:#0f2a21;stroke:#275844}
+.ro{fill:#ff9aae}.ros{fill:#331620;stroke:#6d2b41}.rof{fill:#ff8098}
+}
+</style>
+<text class="ink bb" x="60" y="116" font-size="58" letter-spacing="-2">thoughts</text>
+<text class="mut" x="63" y="152" font-size="19">One brain. Every repo. Always in sync.</text>
+<text class="mut" x="63" y="180" font-size="13.5">Git-backed context for AI-assisted work across many repositories.</text>
+<rect class="card2" x="62" y="202" width="184" height="34" rx="9"/>
+<text class="m vi" x="78" y="224" font-size="13">$ thoughts init</text>
+<rect class="card" x="560" y="40" width="168" height="52" rx="11"/>
+<rect class="bls" x="578" y="55" width="22" height="22" rx="6"/>
+<circle class="bl" cx="589" cy="66" r="3.2"/>
+<text class="ink" x="610" y="70.5" font-size="12.5">payments-api</text>
+<rect class="card" x="560" y="108" width="168" height="52" rx="11"/>
+<rect class="bls" x="578" y="123" width="22" height="22" rx="6"/>
+<circle class="bl" cx="589" cy="134" r="3.2"/>
+<text class="ink" x="610" y="138.5" font-size="12.5">orders-service</text>
+<rect class="card" x="560" y="176" width="168" height="52" rx="11"/>
+<rect class="bls" x="578" y="191" width="22" height="22" rx="6"/>
+<circle class="bl" cx="589" cy="202" r="3.2"/>
+<text class="ink" x="610" y="206.5" font-size="12.5">notifications</text>
+<path class="ln" d="M728,66 C772,66 772,134 812,134"/>
+<path class="ln" d="M728,134 L812,134"/>
+<path class="ln" d="M728,202 C772,202 772,134 812,134"/>
+<rect class="vis" x="812" y="76" width="138" height="116" rx="14"/>
+<path class="vil" d="M881,118 L862.0,102.8 M881,118 L900.0,102.8 M881,118 L881,138.9" opacity="0.65"/><circle class="vif" cx="862.0" cy="102.8" r="3.9899999999999998"/><circle class="vif" cx="900.0" cy="102.8" r="3.9899999999999998"/><circle class="vif" cx="881" cy="138.9" r="3.9899999999999998"/><circle class="vif" cx="881" cy="118" r="7.6"/>
+<text class="vi b" x="881" y="166" font-size="13.5" text-anchor="middle">brain</text>
+<text class="mut" x="881" y="183" font-size="11" text-anchor="middle">one git repo</text>
+</svg>
