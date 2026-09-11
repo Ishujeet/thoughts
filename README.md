@@ -110,21 +110,36 @@ thoughts --version
 
 ### Attach your first repo
 
+**If your team already has a brain**, point `--brain` at its git URL. This is the normal case, and the same command works in every repo:
+
 ```bash
 cd ~/code/payments-api
+thoughts init --yes --brain git@github.com:acme/acme-brain.git
+```
 
-# Point at an existing brain, or create one at a local path.
+**If you are creating the brain**, point `--brain` at a new local path instead. `init` creates the repository, scaffolds the zones, and makes the first commit. Push it once, and everyone else uses the URL above:
+
+```bash
+cd ~/code/payments-api
 thoughts init --yes --brain ~/code/acme-brain
 
-# Write something.
+cd ~/code/acme-brain
+git remote add origin git@github.com:acme/acme-brain.git
+git push -u origin HEAD
+```
+
+A git URL has to point at a repository that is already a brain. Cloning a new empty one fails with `brain.yml is missing`, which is why the first brain is created from a path.
+
+Then work as normal:
+
+```bash
+cd ~/code/payments-api
 thoughts new spec "Refund endpoint v2"
 $EDITOR thoughts/repos/payments-api/specs/2026-09-11-refund-endpoint-v2.md
-
-# Share it.
 thoughts sync
 ```
 
-Now do the same in the next repo. Its `thoughts/` symlink shows the spec you just wrote.
+Now run the same `init` in the next repo. Its `thoughts/` symlink already shows the spec you just wrote.
 
 ## Commands
 
@@ -149,6 +164,16 @@ thoughts init [--brain <url|id|path>] [--repo-id <id>] [--tools claude-code,code
 ```
 
 Resolves or creates the brain, registers this repo in `brain.yml`, creates the `thoughts` symlink, gitignores it, writes `.thoughts.yml`, installs the kit, inserts the managed block, and runs an initial sync. Re-running is safe: it reports drift instead of redoing work.
+
+`--brain` takes three forms:
+
+| Form | Example | Behaviour |
+|---|---|---|
+| git URL | `git@github.com:acme/acme-brain.git`, `https://…` | Clones it. The repository must already be a brain |
+| Local path | `~/code/acme-brain`, `./brain` | Uses it if it is a brain. Creates one if the path is new or empty |
+| Brain id | `acme-brain` | An existing clone under `~/.thoughts/brains/`, or a remote recorded in your global config |
+
+A URL carrying credentials is refused. Once `.thoughts.yml` exists, it wins, and `--brain` is ignored with a warning.
 
 A repo whose `.thoughts.yml` is committed but which you have never initialised on this machine is **attached, not initialised**. Every other command refuses with exit 5 and tells you to run `thoughts init`.
 
@@ -365,6 +390,13 @@ Your global npm prefix is a system directory such as `/usr/local/lib/node_module
 <summary><code>This repo is attached to brain &lt;name&gt; but not initialised on this machine</code></summary>
 
 Someone else on your team ran `thoughts init` and committed `.thoughts.yml`, but you have not initialised the repo on your own machine, so the `thoughts/` symlink and the local brain clone do not exist yet. Run `thoughts init`. It will not ask you for the brain or the repo id, because both come from the committed file.
+
+</details>
+
+<details>
+<summary><code>&lt;url&gt; is not a brain: brain.yml is missing</code></summary>
+
+You pointed `--brain` at a git URL for a repository that exists but has never been set up as a brain, most often a freshly created empty one. Create the brain from a local path first, then push it and share the URL. See [Attach your first repo](#attach-your-first-repo).
 
 </details>
 
