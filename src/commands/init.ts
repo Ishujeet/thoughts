@@ -38,6 +38,10 @@ import {
   saveRepoConfig,
 } from '../brain/config.js';
 import { ensureRepoDirs, registerRepo, scaffoldBrain } from '../brain/layout.js';
+import { isCredRef, maskConnectionString } from '../brain/backends/credref.js';
+import { connectionRefFor, kindFromRef, resolveBackend } from '../brain/backends/resolve.js';
+import { isProvisionable } from '../brain/backends/types.js';
+import { writeDockerSnippet } from '../brain/backends/snippet.js';
 import { preflight } from '../brain/preflight.js';
 import * as git from '../git.js';
 import * as out from '../output.js';
@@ -48,12 +52,14 @@ import {
   DEFAULT_KINDS,
   ExitCode,
   ThoughtsError,
+  type BackendKind,
   type BrainConfig,
   type Finding,
   type RepoConfig,
   type StepReport,
   type TemplateSource,
 } from '../types.js';
+import { parseBackendDescriptor } from '../brain/backends/types.js';
 import {
   SecretRefusedError,
   assertRepoIdSegment,
@@ -65,9 +71,14 @@ import {
   translateGitError,
 } from './common.js';
 import { runSync, type SyncResult } from './sync.js';
+import { stepReportFor } from './codegraph-step.js';
 
 export interface InitOptions {
   brain?: string;
+  /** Store backend (specs/16): git (default) | psql | nebula. Immutable after init. */
+  backend?: string;
+  /** Cred-ref (`env:VAR` / `keyref:name`) for a non-git store (specs/10). */
+  connectionRef?: string;
   repoId?: string;
   tools?: string;
   templates?: string;
@@ -223,11 +234,18 @@ interface BrainRef {
 
 /**
  * Interpret the brain reference: `.thoughts.yml` `brain`, or `--brain` as a
- * clone id, a remote URL, or a local path (O1: create it when missing/empty).
+ * scheme ref (`postgres:<id>` / `nebula:<id>`, specs/16), a clone id, a remote
+ * URL, or a local path (O1: create it when missing/empty).
  */
 async function resolveBrainRef(ref: string, fromRepoConfig: boolean): Promise<BrainRef> {
   const raw = ref.trim();
   assertNoUrlCredentials(raw);
+  const schemeKind = kindFromRef(raw);
+  if (schemeKind !== undefined) {
+    // specs/16 "Credential references": `postgres:<id>` / `nebula:<id>` yield
+    // the brain id directly; there is no git remote behind them.
+    return { remote: raw, brainId: brainIdFromRemote(raw), localNonBare: false };
+  }
   if (isUrl(raw)) {
     const filePath = raw.startsWith('file://') ? raw.slice('file://'.length) : undefined;
     return {
@@ -376,14 +394,53 @@ export async function runInit(opts: InitOptions, cwd: string): Promise<InitResul
       hint: 'thoughts init --yes --brain <remote url | local path>',
     });
   }
-  const { brainId, remote } = brainRef;
-  const shownRemote = redactUrlCredentials(remote);
+  const { brainId, remote: brainRemote } = brainRef;
+  let remote = brainRemote;
   const brainRoot = brainCloneDir(brainId);
+  const brainConfigSoFar = fs.existsSync(path.join(brainRoot, BRAIN_CONFIG_FILENAME)) ? await loadBrainConfig(brainRoot) : undefined;
+  const requestedBackend = opts.backend?.trim().toLowerCase();
+  if (requestedBackend !== undefined && requestedBackend !== 'git' && requestedBackend !== 'psql' && requestedBackend !== 'nebula') {
+    throw new ThoughtsError(`invalid --backend value "${requestedBackend}"`, ExitCode.Validation, {
+      hint: 'use git (default), psql or nebula (specs/16-brain-backends.md)',
+    });
+  }
+  const descriptor = parseBackendDescriptor(brainConfigSoFar?.backend);
+  const kind = descriptor?.kind ?? kindFromRef(remote) ?? (requestedBackend as BackendKind | undefined) ?? 'git';
+  if (descriptor !== undefined && requestedBackend !== undefined && requestedBackend !== 'git' && descriptor.kind !== requestedBackend) {
+    throw new ThoughtsError(`brain ${brainId} uses the ${descriptor.kind} backend; a brain's backend is immutable (specs/16)`, ExitCode.Validation, {
+      hint: `drop --backend ${requestedBackend}`,
+    });
+  }
+  if (kind !== 'git' && kindFromRef(remote) === undefined) {
+    // A plain id or path: make the stored ref carry the scheme so every later
+    // command resolves the same backend (specs/16 "Credential references").
+    if (brainRef.createAt !== undefined || looksLikePath(remote)) {
+      throw new ThoughtsError(`--backend ${kind} needs a brain ref like ${kind === 'nebula' ? 'nebula' : 'postgres'}:${brainId}, not a local git path`, ExitCode.Validation, {
+        hint: 'a psql/nebula brain has no git remote; name it with the scheme and a brain id',
+      });
+    }
+    remote = `${kind === 'nebula' ? 'nebula' : 'postgres'}:${brainId}`;
+    brainRef.remote = remote;
+  }
+  // specs/16 "Credential references": a --connection-ref is a *ref*, never the
+  // connection string itself. A pasted literal is refused here — before
+  // anything connects and before the global config could persist it — and the
+  // message carries the value only masked.
+  const connectionRef = opts.connectionRef?.trim();
+  if (kind !== 'git' && connectionRef !== undefined && connectionRef.length > 0 && !isCredRef(connectionRef)) {
+    throw new ThoughtsError(`invalid connection reference "${maskConnectionString(connectionRef)}"`, ExitCode.Validation, {
+      hint: '--connection-ref takes a cred-ref (env:<VARNAME> or keyref:<name>); set the connection string itself in the environment or the key store',
+    });
+  }
+  const shownRemote = redactUrlCredentials(remote);
+  // Resolve the backend before anything is written (specs/16): a missing
+  // connection ref is exit 1 naming the env var, with nothing provisioned.
+  const backend = await resolveBackend({ brainId, workspace: brainRoot, brain: brainConfigSoFar, brainRef: remote, connectionRef: opts.connectionRef });
   // Before anything is written: a foreign directory where the clone belongs
   // must fail here, not after a new brain has been scaffolded at `--brain <path>`.
   assertUsableCloneDir(brainRoot);
   let brainCreated = false;
-  if (brainRef.createAt) {
+  if (brainRef.createAt && kind === 'git') {
     if (write) {
       await createBrainAt(brainRef.createAt, now);
       brainCreated = true;
@@ -394,42 +451,87 @@ export async function runInit(opts: InitOptions, cwd: string): Promise<InitResul
   }
 
   let fetchFailed = false;
-  const cloneHasBrain = fs.existsSync(path.join(brainRoot, BRAIN_CONFIG_FILENAME));
-  if (cloneHasBrain) {
-    if (await git.hasRemote(brainRoot)) {
-      try {
-        await git.fetch(brainRoot);
-        report(steps, `brain clone ${brainRoot}`, 'up-to-date', 'fetched');
-      } catch (err) {
-        fetchFailed = true;
-        const e = translateGitError(err, 'fetch', remote);
-        out.warn(`could not fetch brain ${brainId}: ${e.message}`);
-        report(steps, `brain clone ${brainRoot}`, 'up-to-date', 'fetch failed; working offline');
-      }
+  if (kind !== 'git') {
+    // specs/16 "Provisioning": connect + provision, then materialise the
+    // workspace. The store is reachable or init stops here with a snippet.
+    if (!isProvisionable(backend)) {
+      throw new ThoughtsError(`backend "${kind}" cannot provision a store`, ExitCode.Validation);
+    }
+    const shownRef = maskConnectionString(opts.connectionRef?.trim() ?? (await connectionRefFor({ brainId, workspace: brainRoot, brainRef: remote }, kind)));
+    if (!write) {
+      report(steps, `store ${kind} ${brainId}`, 'dry-run', `connection ${shownRef}`);
+      report(steps, `brain workspace ${brainRoot}`, 'dry-run', 'would materialise from the store');
     } else {
-      report(steps, `brain clone ${brainRoot}`, 'up-to-date');
+      const existedBefore = fs.existsSync(brainRoot);
+      fs.mkdirSync(brainRoot, { recursive: true });
+      // The non-secret object name (specs/16 "brain.yml backend block"):
+      // psql's database, nebula's space — the backend's own, never derived
+      // from the connection string.
+      const storeName = await backend.storeName();
+      try {
+        const provisioned = await backend.provision();
+        report(steps, `store ${kind} ${storeName}`, 'up-to-date', `schema ${provisioned.version}, connection ${shownRef}`);
+        await backend.materialise();
+        if (!fs.existsSync(path.join(brainRoot, BRAIN_CONFIG_FILENAME))) {
+          await scaffoldBrain(brainRoot, { name: brainId, now });
+          const fresh = await loadBrainConfig(brainRoot);
+          await saveBrainConfig(brainRoot, { ...fresh, backend: kind === 'nebula' ? { kind, space: storeName } : { kind, database: storeName } });
+        }
+        report(steps, `brain workspace ${brainRoot}`, 'created', 'materialised from the store');
+      } catch (err) {
+        // A failed connect+provision leaves nothing behind: an empty workspace
+        // would look like a foreign directory to every later `init` (specs/02).
+        if (!existedBefore && !fs.existsSync(path.join(brainRoot, BRAIN_CONFIG_FILENAME))) fs.rmSync(brainRoot, { recursive: true, force: true });
+        if (err instanceof ThoughtsError && err.exitCode === ExitCode.RemoteUnreachable) {
+          // specs/02/16: an unreachable store prints a ready-to-run snippet and
+          // exits 2; the CLI never starts anything itself.
+          // Name the env var the user's cred-ref points at, so the snippet's
+          // export line is the one they actually run (specs/10).
+          const envVar = /^env:([A-Za-z0-9_.-]+)$/.exec((opts.connectionRef ?? '').trim())?.[1];
+          const snippet = writeDockerSnippet(brainId, kind, storeName, envVar);
+          out.warn(`store unreachable; wrote a ready-to-run docker snippet: ${snippet}`);
+        }
+        throw err;
+      }
     }
-  } else if (write) {
-    assertUsableCloneDir(brainRoot);
-    if (isEmptyDir(brainRoot)) fs.rmdirSync(brainRoot);
-    fs.mkdirSync(brainsDir(), { recursive: true });
-    try {
-      await git.clone(remote, brainRoot);
-    } catch (err) {
-      // Whatever a partial clone left behind is ours to remove: kept, it looks
-      // like a foreign directory and blocks every later `init` for this brain.
-      fs.rmSync(brainRoot, { recursive: true, force: true });
-      throw translateGitError(err, 'clone', remote);
-    }
-    if (!fs.existsSync(path.join(brainRoot, BRAIN_CONFIG_FILENAME))) {
-      fs.rmSync(brainRoot, { recursive: true, force: true });
-      throw new ThoughtsError(`${shownRemote} is not a brain: ${BRAIN_CONFIG_FILENAME} is missing`, ExitCode.Validation, {
-        hint: 'point --brain at a brain repository, or at a new (empty) path to create one',
-      });
-    }
-    report(steps, `brain clone ${brainRoot}`, 'created', `from ${shownRemote}`);
   } else {
-    report(steps, `brain clone ${brainRoot}`, 'dry-run', `would clone ${shownRemote}`);
+    const cloneHasBrain = fs.existsSync(path.join(brainRoot, BRAIN_CONFIG_FILENAME));
+    if (cloneHasBrain) {
+      if (await git.hasRemote(brainRoot)) {
+        try {
+          await git.fetch(brainRoot);
+          report(steps, `brain clone ${brainRoot}`, 'up-to-date', 'fetched');
+        } catch (err) {
+          fetchFailed = true;
+          const e = translateGitError(err, 'fetch', remote);
+          out.warn(`could not fetch brain ${brainId}: ${e.message}`);
+          report(steps, `brain clone ${brainRoot}`, 'up-to-date', 'fetch failed; working offline');
+        }
+      } else {
+        report(steps, `brain clone ${brainRoot}`, 'up-to-date');
+      }
+    } else if (write) {
+      assertUsableCloneDir(brainRoot);
+      if (isEmptyDir(brainRoot)) fs.rmdirSync(brainRoot);
+      fs.mkdirSync(brainsDir(), { recursive: true });
+      try {
+        await git.clone(remote, brainRoot);
+      } catch (err) {
+        // Whatever a partial clone left behind is ours to remove: kept, it looks
+        // like a foreign directory and blocks every later `init` for this brain.
+        fs.rmSync(brainRoot, { recursive: true, force: true });
+        throw translateGitError(err, 'clone', remote);
+      }
+      if (!fs.existsSync(path.join(brainRoot, BRAIN_CONFIG_FILENAME))) {
+        fs.rmSync(brainRoot, { recursive: true, force: true });
+        throw new ThoughtsError(`${shownRemote} is not a brain: ${BRAIN_CONFIG_FILENAME} is missing`, ExitCode.Validation, {
+          hint: 'point --brain at a brain repository, or at a new (empty) path to create one',
+        });
+      }
+      report(steps, `brain clone ${brainRoot}`, 'created', `from ${shownRemote}`);
+    } else {
+      report(steps, `brain clone ${brainRoot}`, 'dry-run', `would clone ${shownRemote}`);
+    }
   }
   const haveBrain = fs.existsSync(path.join(brainRoot, BRAIN_CONFIG_FILENAME));
   const brain: BrainConfig | undefined = haveBrain ? await loadBrainConfig(brainRoot) : undefined;
@@ -438,7 +540,11 @@ export async function runInit(opts: InitOptions, cwd: string): Promise<InitResul
 
   // Pre-commit hook in the CLI-owned clone (always; re-installed when missing).
   // TODO(scan): `thoughts scan --staged` is the milestone-1 subset in src/commands/scan.ts.
-  if (haveBrain) {
+  // specs/16: the hook is git-only — a non-git store has no hook to install;
+  // scanning happens inside `sync` instead.
+  if (kind !== 'git') {
+    report(steps, 'brain pre-commit hook', 'skipped', 'git-only; scanning happens inside sync (specs/16)');
+  } else if (haveBrain) {
     const hookPath = path.join(await git.hooksDir(brainRoot), 'pre-commit');
     const script = preCommitHookScript(version);
     const existingHook = readIfExists(hookPath);
@@ -704,6 +810,12 @@ export async function runInit(opts: InitOptions, cwd: string): Promise<InitResul
       global.attached.push({ path: attachedPath, repo_id: repoId, brain: brainId, initialised_at: isoTimestamp(now) });
     }
     global.brains[brainId] = { ...(global.brains[brainId] ?? {}), remote };
+    if (kind !== 'git') {
+      // specs/10/16: the cred-ref (never the secret) lives in the global
+      // config, outside the brain, so every later command resolves it.
+      const ref = connectionRef ?? (await connectionRefFor({ brainId, workspace: brainRoot, brainRef: remote }, kind));
+      global.brains[brainId]['connection_ref'] = ref;
+    }
     if (!global.default_brain) global.default_brain = brainId;
     await saveGlobalConfig(global);
     report(steps, 'global config attached[]', already ? 'up-to-date' : 'updated');
@@ -714,7 +826,7 @@ export async function runInit(opts: InitOptions, cwd: string): Promise<InitResul
   // ---- 8. Initial sync + report ---------------------------------------------
   let sync: SyncResult | undefined;
   if (write) {
-    const remoteConfigured = await git.hasRemote(brainRoot);
+    const remoteConfigured = (await backend.remoteUrl()) !== undefined;
     // Pushing into a checked-out local repo only works for brains we created
     // (receive.denyCurrentBranch=updateInstead); otherwise commit locally only.
     const pushable = remoteConfigured && !fetchFailed && (!brainRef.localNonBare || brainCreated);
@@ -729,8 +841,13 @@ export async function runInit(opts: InitOptions, cwd: string): Promise<InitResul
       'done',
       sync.committed ? `committed ${sync.committed.slice(0, 7)}${sync.pushed ? ', pushed' : ''}` : 'nothing to commit',
     );
+    // The graph is built at init (specs/17 "When the graph is built"), inside
+    // the initial sync's codegraph step; the row reports its outcome.
+    const graphRow = stepReportFor(repoId, sync.codegraph);
+    report(steps, graphRow.step, graphRow.state, graphRow.detail);
   } else {
     report(steps, 'initial sync', 'dry-run');
+    report(steps, `codegraph ${repoId}`, 'dry-run');
   }
 
   const result: InitResult = { repoRoot, repoId, brainId, brainRemote: remote, brainRoot, tools, steps, dryRun };
@@ -750,6 +867,8 @@ export function register(program: Command): void {
     .command('init')
     .description('Attach this repo to a brain and install the standard kit')
     .option('--brain <url|id|path>', 'brain remote URL, clone id, or local path (created when missing)')
+    .option('--backend <kind>', 'store backend (specs/16): git (default) | psql | nebula; immutable after init')
+    .option('--connection-ref <ref>', 'cred-ref for a non-git store, e.g. env:BRAIN_PG (specs/10; never a connection string)')
     .option('--repo-id <id>', 'repo id inside the brain (default: remote name or directory name)')
     .option('--tools <list>', 'comma-separated AI tools: claude-code,codex,pi')
     .option('--templates <source>', 'template source: builtin | brain | path:<dir> | git:<url>')

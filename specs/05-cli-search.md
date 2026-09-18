@@ -31,6 +31,8 @@ Selection, in order: `--backend grep|sqlite` flag → `search.backend` in global
 
 Binding is `node:sqlite` when the running Node provides it, else `better-sqlite3` (D11). Either way the native piece MUST be an optional dependency: a failed native build during install is not an install failure.
 
+Search backends are independent of the brain backend (D22): `grep` is universal across every brain backend — git, psql, and nebula — because it reads the workspace at `~/.thoughts/brains/<brain-id>/`. PostgreSQL full-text and NebulaGraph `LOOKUP` MAY later be added as optional per-store hooks behind the **same selection chain** above (D6 untouched: the storage backend is not the search backend).
+
 ## Matching
 
 Both backends MUST return the same result set for the same query; only ranking quality and speed may differ. Acceptance tests run every search fixture against both.

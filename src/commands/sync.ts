@@ -1,22 +1,27 @@
 /**
  * `thoughts sync` (specs/03). Pipeline order is fixed by the contract:
  * scan → validate → regenerate → commit → pull --rebase → push → report.
+ * Store steps run through the brain backend (specs/16); log building and the
+ * commit message stay backend-agnostic here.
  */
 import type { Command } from 'commander';
 import path from 'node:path';
 import { cliVersion } from '../assets.js';
 import { loadBrainConfig } from '../brain/config.js';
+import { resolveBackend } from '../brain/backends/resolve.js';
+import { conflictError, type BrainBackend, type WorkspaceChange } from '../brain/backends/types.js';
 import { regenerate } from '../brain/generate.js';
+import { isCodegraphPath } from '../brain/location.js';
 import { locate } from '../brain/layout.js';
 import { formatIssues, hasErrors } from '../brain/lint.js';
 import { parseFrontmatter, parseThought, validateThought } from '../brain/okf.js';
 import { preflight } from '../brain/preflight.js';
-import * as git from '../git.js';
 import * as out from '../output.js';
 import { loadAllowList } from '../security/allowlist.js';
 import { hasBlocking, scanFiles } from '../security/scanner.js';
 import { ExitCode, ThoughtsError, type BrainConfig, type LintIssue, type LogEntry } from '../types.js';
-import { SecretRefusedError, isGeneratedFile, isoDate, printWarnings, translateGitError } from './common.js';
+import { describeOutcome, runCodegraphStep, type CodegraphOutcome } from './codegraph-step.js';
+import { SecretRefusedError, isoDate, printWarnings, translateGitError } from './common.js';
 
 export interface SyncOptions {
   pullOnly?: boolean;
@@ -53,6 +58,10 @@ export interface SyncResult {
   incoming: IncomingChange[];
   /** Lint issues found in changed files (warnings when the run continued). */
   issues: LintIssue[];
+  /** Codegraph step outcome (specs/03 step 7); undefined when it was skipped. */
+  codegraph?: CodegraphOutcome;
+  /** Paths a store-wins conflict settled against this workspace (specs/16 nebula row). */
+  storeWins?: string[];
 }
 
 interface ChangedFile {
@@ -62,13 +71,15 @@ interface ChangedFile {
   deleted: boolean;
 }
 
-function changedFromStatus(entries: git.StatusEntry[]): ChangedFile[] {
+function changedFromBackend(entries: WorkspaceChange[]): ChangedFile[] {
   return entries
-    .filter((e) => !e.path.startsWith('.git/'))
+    // specs/17: generated codegraph data is neither scanned, validated, logged
+    // nor reported — it is regenerated data, never hand-edited.
+    .filter((e) => !isCodegraphPath('/' + e.path.replace(/^\/+/, '')))
     .map((e) => ({
       bundlePath: '/' + e.path.replace(/^\/+/, ''),
       code: e.code,
-      deleted: e.code[0] === 'D' || e.code[1] === 'D',
+      deleted: e.deleted,
     }));
 }
 
@@ -77,18 +88,19 @@ function titleOf(fm: { title?: unknown } | undefined, fallback: string): string 
 }
 
 /** Build the log entries for the changed concept files. */
-export async function buildLogEntries(brainRoot: string, changed: ChangedFile[]): Promise<LogEntry[]> {
+export async function buildLogEntries(backend: BrainBackend, changed: ChangedFile[]): Promise<LogEntry[]> {
   const entries: LogEntry[] = [];
   for (const f of changed) {
     const loc = locate(f.bundlePath);
     if (!loc || !f.bundlePath.endsWith('.md') || f.bundlePath.includes('/references/')) continue;
+    const rel = f.bundlePath.slice(1);
     if (f.deleted) {
-      const old = await git.showAtHead(brainRoot, f.bundlePath);
+      const old = await backend.read(rel, { revision: 'HEAD' });
       const fm = old !== undefined ? parseFrontmatter(old).frontmatter : undefined;
       entries.push({ change: 'removed', path: f.bundlePath, title: titleOf(fm, f.bundlePath) });
       continue;
     }
-    const t = await parseThought(path.join(brainRoot, f.bundlePath.slice(1)), f.bundlePath);
+    const t = await parseThought(path.join(backend.workspace, rel), f.bundlePath);
     const title = titleOf(t.frontmatter, f.bundlePath);
     const isNew = f.code === '??' || f.code[0] === 'A' || f.code[1] === 'A' || f.code[0] === 'R' || f.code[0] === 'C';
     if (isNew) {
@@ -99,7 +111,7 @@ export async function buildLogEntries(brainRoot: string, changed: ChangedFile[])
       continue;
     }
     const entry: LogEntry = { change: 'updated', path: f.bundlePath, title };
-    const old = await git.showAtHead(brainRoot, f.bundlePath);
+    const old = await backend.read(rel, { revision: 'HEAD' });
     if (old !== undefined) {
       const oldStatus = parseFrontmatter(old).frontmatter.status;
       const newStatus = t.frontmatter.status;
@@ -125,6 +137,30 @@ export function commitMessage(repoId: string, entries: LogEntry[], firstLine?: s
   return lines.length > 0 ? `${head}\n\n${lines.join('\n')}` : head;
 }
 
+/**
+ * specs/16 sync table, nebula row: this backend settles a conflict itself by
+ * taking the store's side — the workspace copy is overwritten and the loss is
+ * recorded in `log.md` and in the store's change log (never silently). Returns
+ * the settled paths, empty when `err` was not one of those conflicts.
+ */
+async function settleStoreWinsConflict(
+  backend: BrainBackend,
+  brain: BrainConfig,
+  date: string,
+  result: SyncResult,
+  err: unknown,
+): Promise<string[]> {
+  if (!(err instanceof ThoughtsError) || err.exitCode !== ExitCode.Conflict) return [];
+  const info = await backend.conflictInfo();
+  if (info.storeWins !== true || info.conflicted.length === 0) return [];
+  const settled = await backend.resolveConflicts({ brain, log: { date, entries: result.entries } });
+  for (const p of settled) {
+    out.warn(`store won for ${p}: the local change was overwritten and a note was added to log.md (specs/16)`);
+  }
+  if (settled.length > 0) result.storeWins = settled;
+  return settled;
+}
+
 function groupOf(bundlePath: string): string {
   const loc = locate(bundlePath);
   if (!loc) return 'other';
@@ -132,9 +168,8 @@ function groupOf(bundlePath: string): string {
   return `${loc.zone}/${loc.owner ?? ''}`;
 }
 
-async function collectIncoming(brainRoot: string, from: string, to: string): Promise<IncomingChange[]> {
-  if (from === to) return [];
-  const diff = await git.diffNameStatus(brainRoot, from, to);
+async function collectIncoming(backend: BrainBackend, from: string, to: string): Promise<IncomingChange[]> {  if (from === to) return [];
+  const diff = await backend.diff(from, to);
   const incoming: IncomingChange[] = [];
   for (const d of diff) {
     const bundlePath = '/' + d.path;
@@ -144,7 +179,7 @@ async function collectIncoming(brainRoot: string, from: string, to: string): Pro
     let title = path.posix.basename(bundlePath, '.md');
     if (change !== 'removed') {
       try {
-        const t = await parseThought(path.join(brainRoot, d.path), bundlePath);
+        const t = await parseThought(path.join(backend.workspace, d.path), bundlePath);
         title = titleOf(t.frontmatter, bundlePath);
       } catch {
         // unreadable; keep the filename
@@ -169,75 +204,6 @@ function printIncoming(incoming: IncomingChange[], say: (m: string) => void): vo
     }
     say(`    ${c.change.padEnd(7)} ${(c.kind ?? '').padEnd(10)} ${c.title}`);
   }
-}
-
-/**
- * Resolve rebase conflicts that touch only generated files by taking the
- * upstream side and regenerating (re-appending this run's log entries).
- * Returns the conflicted concept files when a human must resolve them.
- */
-async function resolveGeneratedConflicts(
-  brainRoot: string,
-  brain: BrainConfig,
-  log: { date: string; entries: LogEntry[] },
-): Promise<string[]> {
-  for (let guard = 0; guard < 50; guard += 1) {
-    const conflicted = await git.conflictedFiles(brainRoot);
-    if (conflicted.length === 0) {
-      if (!(await git.isRebaseInProgress(brainRoot))) return [];
-      // Resolved but not continued (or an empty step): continue the rebase;
-      // a replayed commit that became empty is skipped.
-      try {
-        await git.git(['-c', 'core.editor=true', 'rebase', '--continue'], { cwd: brainRoot });
-      } catch {
-        try {
-          await git.git(['rebase', '--skip'], { cwd: brainRoot });
-        } catch {
-          return await git.conflictedFiles(brainRoot);
-        }
-      }
-      continue;
-    }
-    const concept = conflicted.filter((p) => !isGeneratedFile('/' + p));
-    if (concept.length > 0) {
-      // Generated files never need a human (specs/03): settle them on the
-      // upstream side so `git rebase --continue` only waits for the concept
-      // files. The next `sync` regenerates them from the resolved content.
-      for (const p of conflicted) {
-        if (isGeneratedFile('/' + p)) {
-          try {
-            await git.git(['checkout', '--ours', '--', p], { cwd: brainRoot });
-            await git.git(['add', '--', p], { cwd: brainRoot });
-          } catch {
-            // leave it to the user
-          }
-        }
-      }
-      return concept;
-    }
-    // `ours` during a rebase is the upstream side; regenerate re-adds our entries.
-    for (const p of conflicted) {
-      try {
-        await git.git(['checkout', '--ours', '--', p], { cwd: brainRoot });
-      } catch {
-        // deleted on one side: fall back to whatever is in the tree
-      }
-    }
-    await regenerate(brainRoot, brain, { log });
-    await git.addAll(brainRoot);
-    try {
-      await git.git(['-c', 'core.editor=true', 'rebase', '--continue'], { cwd: brainRoot });
-    } catch {
-      // a further conflict in the next replayed commit; loop
-    }
-  }
-  return await git.conflictedFiles(brainRoot);
-}
-
-function conflictError(files: string[]): ThoughtsError {
-  return new ThoughtsError(`conflict in ${files.length} file${files.length === 1 ? '' : 's'}: ${files.join(', ')}`, ExitCode.Conflict, {
-    hint: 'resolve with git, then run: thoughts sync',
-  });
 }
 
 export async function runSync(opts: SyncOptions, cwd: string): Promise<SyncResult> {
@@ -276,22 +242,29 @@ async function syncImpl(opts: SyncOptions, cwd: string): Promise<SyncResult> {
   const repoId = ctx.mode === 'repo' && ctx.repoConfig ? ctx.repoConfig.repo_id : 'brain';
   const date = isoDate(now);
   const result: SyncResult = { brainRoot, repoId, entries: [], pulled: false, pushed: false, incoming: [], issues: [] };
+  const backend = await resolveBackend({
+    brainId: ctx.brainId ?? path.basename(brainRoot),
+    workspace: brainRoot,
+    brain,
+    brainRef: ctx.repoConfig?.brain ?? opts.brain,
+  });
 
   // TODO(milestone 2): brain.yml hooks.pre_sync / hooks.post_sync (specs/03 "Hooks").
 
   // An earlier run left a conflicted rebase behind?
-  if (await git.isRebaseInProgress(brainRoot)) {
-    const remaining = await resolveGeneratedConflicts(brainRoot, brain, { date, entries: [] });
+  if ((await backend.conflictInfo()).inProgress) {
+    const remaining = await backend.resolveConflicts({ brain, log: { date, entries: [] } });
     if (remaining.length > 0) throw conflictError(remaining);
   }
 
-  const remote = await git.remoteUrl(brainRoot);
-  const upstreamBefore = await git.upstreamSha(brainRoot);
-  let headBefore: string | undefined = (await git.hasHead(brainRoot)) ? await git.headSha(brainRoot) : undefined;
+  const remote = await backend.remoteUrl();
+  const upstreamBefore = await backend.upstreamRevision();
+  let headBefore: string | undefined = await backend.revision();
 
+  let pushPaths: string[] = [];
   if (!opts.pullOnly) {
-    const status = await git.statusPorcelain(brainRoot);
-    const changed = changedFromStatus(status);
+    const changed = changedFromBackend(await backend.dirty());
+    pushPaths = changed.map((c) => c.bundlePath);
 
     // 0. Scan for secrets — before anything is staged.
     const toScan = changed.filter((c) => !c.deleted).map((c) => c.bundlePath);
@@ -328,41 +301,44 @@ async function syncImpl(opts: SyncOptions, cwd: string): Promise<SyncResult> {
     }
 
     // 2. Log entries + regenerate.
-    const entries = await buildLogEntries(brainRoot, changed);
+    const entries = await buildLogEntries(backend, changed);
     result.entries = entries;
     await regenerate(brainRoot, brain, { log: { date, entries } });
 
-    // 3. Commit.
-    const after = await git.statusPorcelain(brainRoot);
-    if (after.length > 0) {
-      await git.addAll(brainRoot);
+    // 3. Commit to the workspace (the store sees it in step 5).
+    if ((await backend.dirty()).length > 0) {
       const message = commitMessage(repoId, entries, opts.message);
       try {
-        result.committed = await git.commit(brainRoot, message);
+        const committed = await backend.commit(message);
+        if (committed !== undefined) {
+          result.committed = committed;
+          result.commitMessage = message;
+          headBefore = committed;
+          say(`committed ${committed.slice(0, 7)}: ${message.split('\n')[0]}`);
+        }
       } catch (err) {
-        throw translateGitError(err, 'other');
+        // A store-wins backend (specs/16 nebula row) settles its own conflict:
+        // the store keeps its version, the loss is recorded, sync continues.
+        if ((await settleStoreWinsConflict(backend, brain, date, result, err)).length === 0) {
+          throw translateGitError(err, 'other');
+        }
       }
-      result.commitMessage = message;
-      headBefore = result.committed;
-      say(`committed ${result.committed.slice(0, 7)}: ${message.split('\n')[0]}`);
     }
   }
 
   // 4. Pull.
   if (!opts.pushOnly && remote !== undefined) {
     try {
-      await git.pullRebase(brainRoot);
+      await backend.pull(undefined, { brain, log: { date, entries: result.entries } });
       result.pulled = true;
     } catch (err) {
-      const conflicted = await git.conflictedFiles(brainRoot);
-      const rebasing = await git.isRebaseInProgress(brainRoot);
-      if (conflicted.length > 0 || rebasing) {
-        const remaining = await resolveGeneratedConflicts(brainRoot, brain, { date, entries: result.entries });
-        if (remaining.length > 0) throw conflictError(remaining);
-        result.pulled = true;
-      } else {
+      // A conflict the backend could not settle arrives as exit 4 (specs/16);
+      // a store-wins backend (specs/16 nebula row) settles its own and syncs on.
+      if ((await settleStoreWinsConflict(backend, brain, date, result, err)).length === 0) {
+        if (err instanceof ThoughtsError && err.exitCode === ExitCode.Conflict) throw err;
         throw translateGitError(err, 'pull', remote);
       }
+      result.pulled = true;
     }
   }
 
@@ -371,8 +347,8 @@ async function syncImpl(opts: SyncOptions, cwd: string): Promise<SyncResult> {
   // message among the commits now sitting on top of the old upstream.
   if (result.committed && result.commitMessage && result.pulled && upstreamBefore !== undefined) {
     let found: string | undefined;
-    for (const sha of await git.revList(brainRoot, upstreamBefore)) {
-      if ((await git.messageOf(brainRoot, sha)) === result.commitMessage) {
+    for (const sha of await backend.revisionsSince(upstreamBefore)) {
+      if ((await backend.messageOf(sha)) === result.commitMessage) {
         found = sha;
         break;
       }
@@ -390,8 +366,8 @@ async function syncImpl(opts: SyncOptions, cwd: string): Promise<SyncResult> {
   const wantPush = opts.push !== false && !opts.pullOnly && remote !== undefined;
   if (wantPush) {
     try {
-      await git.push(brainRoot);
-      result.pushed = true;
+      const pushed = await backend.push({ paths: pushPaths, message: result.commitMessage ?? '', logEntries: result.entries });
+      result.pushed = pushed.pushed;
     } catch (err) {
       throw translateGitError(err, 'push', remote);
     }
@@ -399,10 +375,23 @@ async function syncImpl(opts: SyncOptions, cwd: string): Promise<SyncResult> {
 
   // 6. Reindex: TODO(milestone 2): SQLite FTS incremental reindex (specs/03 step 6, specs/05).
 
-  // 7. Report.
-  if (headBefore !== undefined && (await git.hasHead(brainRoot))) {
-    const headNow = await git.headSha(brainRoot);
-    result.incoming = await collectIncoming(brainRoot, headBefore, headNow);
+  // 7. Codegraph (specs/03 step 7, specs/17): incremental against the code
+  // repo's HEAD. Never fatal: any failure skips this repo's step with exactly
+  // one warning and the stored graph stays as it is.
+  const codeRepoRoot = ctx.mode === 'repo' ? ctx.repoRoot : undefined;
+  // The pull may have brought a new brain.yml (a sibling's `package:` field):
+  // the step reads the brain as the store now has it (specs/17 "Cross-repo
+  // edges" are recomputed at brain level).
+  const brainNow = (result.pulled ? await loadBrainConfig(brainRoot) : brain) ?? brain;
+  const codegraph = await runCodegraphStep(backend, brainNow, codeRepoRoot, repoId, { now, push: result.pushed });
+  if (codegraph.status !== 'skipped') result.codegraph = codegraph;
+  const graphLine = describeOutcome(codegraph);
+  if (graphLine !== undefined) say(graphLine);
+
+  // 8. Report.
+  const headNow = await backend.revision();
+  if (headBefore !== undefined && headNow !== undefined) {
+    result.incoming = await collectIncoming(backend, headBefore, headNow);
   }
   printIncoming(result.incoming, say);
   if (!result.committed && result.incoming.length === 0) say('nothing to do');

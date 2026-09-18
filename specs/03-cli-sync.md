@@ -25,19 +25,25 @@ thoughts sync [--pull-only | --push-only] [--message <msg>] [--no-push]
    - added   repos/payments-api/specs/2026-09-08-refund-endpoint.md
    - updated shared/decisions/2026-09-01-idempotency-keys.md
    ```
-   Author is the git user of the brain clone. `--message` overrides the first line only.
-4. **Pull** — `git pull --rebase` from the brain remote.
-5. **Push** — `git push` unless `--no-push` or no remote.
+   Author is the git user of the brain clone. `--message` overrides the first line only. For non-git backends ([16-brain-backends.md](16-brain-backends.md)) there is no git commit: this step writes the workspace and the message becomes the store's history entry for the sync.
+4. **Pull** — `git` backend: `git pull --rebase` from the brain remote (unchanged from v1). Non-git backends have no separate pull step; the store is read as part of the sync itself (psql: inside the same transaction; nebula: a read round-trip before the write).
+5. **Push** — deliver the commit to the store, per backend:
+   - `git`: `git push` unless `--no-push` or no remote.
+   - `psql`: the whole sync runs as a single transaction under an advisory lock; a stale `base_rev` in the store aborts it (exit 4, see Conflict handling).
+   - `nebula`: statements are applied without transactions; on conflict the store wins (see Conflict handling).
 6. **Reindex** — if the SQLite search backend is active, update the FTS index incrementally from the files changed since the last sync. Index failures are logged and ignored; they never fail `sync` (see [05-cli-search.md](05-cli-search.md#backends)).
-7. **Report** — print what came in from other repos, grouped by `repos/<id>`, with title and kind. This is the "what's new" feed and is the main reason a Dev runs `sync`.
+7. **Codegraph** — if the attached code repo has a code graph ([17-codegraph.md](17-codegraph.md)), re-extract it incrementally against `HEAD` (diff against the stored commit; full rebuild past 500 changed files or when the graph metadata is missing). Any grammar or extraction failure prints exactly one warning and `sync` continues — the graph is never a reason for `sync` to fail.
+8. **Report** — print what came in from other repos, grouped by `repos/<id>`, with title and kind. This is the "what's new" feed and is the main reason a Dev runs `sync`.
 
-Order is scan → validate → regenerate → commit → pull → push so that local work is always committed before a rebase touches the tree.
+Order is scan → validate → regenerate → commit → pull → push → reindex → codegraph, so that local work is always committed before a rebase touches the tree.
 
 ## Conflict handling
 
 - Rebase conflicts in **concept files** stop `sync` with the standard git conflict markers and a message pointing to the file. The user resolves with git; `thoughts sync` then continues.
 - Rebase conflicts in **generated files** (`index.md`, `log.md`) are auto-resolved by taking either side and regenerating. Generated files never require human conflict resolution.
 - Generated `log.md` is append-only and date-grouped, so concurrent appends from different repos merge cleanly in most cases.
+- `psql`: no rebase. A stale `base_rev` (another repo wrote to the store since this clone last read it) aborts the transaction with exit 4 and names the conflicting thought; the user reconciles in the workspace and re-runs `sync`.
+- `nebula`: no transactions. On conflict the **store wins**: the local change is discarded, `sync` prints a warning naming what was lost, and appends a note to `log.md`.
 
 ## Watch mode
 
@@ -55,7 +61,7 @@ Order is scan → validate → regenerate → commit → pull → push so that l
 | 1 | Validation failed |
 | 7 | Secret found; nothing committed |
 | 4 | Conflict requires manual resolution |
-| 2 | Remote unreachable (local commit still made) |
+| 2 | Brain store unreachable (local commit still made) |
 
 ## Acceptance criteria
 

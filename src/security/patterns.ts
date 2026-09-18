@@ -139,6 +139,27 @@ export const KNOWN_DETECTORS: readonly Detector[] = [
     strictPlaceholder: true,
   },
   {
+    // specs/15 "Database connection string": a database URL without credentials
+    // is still a host credential in a shared brain (brain.yml, .thoughts.yml).
+    // Credentialed database URLs keep their own kind above, which wins on
+    // overlap; this catches the bare `postgres://host:5432/db` and
+    // `nebula://host:9669/space` forms — no `@` before the first `/`, i.e. no
+    // userinfo at all. A cred-ref (`ref: env:VAR`) never matches: there is no
+    // `scheme://` in it.
+    kind: 'database connection string',
+    severity: 'block',
+    regex: /(?<![A-Za-z0-9+.-])(?:(?:jdbc:)?(?:postgres|postgresql|nebula|mysql)):\/\/[^@\s'"`)>\]]*\/[^\s'"`)>\]]*/gi,
+  },
+  {
+    // The DSN form of the same finding: `host=db user=app password=secret`.
+    kind: 'database connection string',
+    severity: 'block',
+    regex: /(?<![A-Za-z0-9])(?:postgres(?:ql)?|nebula|mysql)\s[^\n;'"]*?password\s*=\s*([^\s;'"]+)/gi,
+    valueGroup: 1,
+    maskWhole: true,
+    strictPlaceholder: true,
+  },
+  {
     // Any other `scheme://user:password@host` (http, https, git, ssh, …). The db
     // schemes above win on overlap; the whole URL is masked so nothing of the
     // credential leaks. `user@host` without a password never matches.

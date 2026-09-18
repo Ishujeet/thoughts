@@ -47,7 +47,8 @@ export async function listTextFiles(root: string): Promise<string[]> {
 export async function listThoughtPaths(brainRoot: string): Promise<string[]> {
   const out: string[] = [];
   for (const zone of ZONES) {
-    await walkDir(brainRoot, path.join(brainRoot, zone), out, new Set([...SKIP_DIRS, 'references']));
+    // `codegraph/` is generated data (specs/17): never walked as thoughts.
+    await walkDir(brainRoot, path.join(brainRoot, zone), out, new Set([...SKIP_DIRS, 'references', 'codegraph']));
   }
   const paths = out.filter((p) => {
     if (!p.endsWith('.md')) return false;

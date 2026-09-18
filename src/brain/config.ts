@@ -25,6 +25,7 @@ import {
 } from '../types.js';
 import { ID_HINT, isValidRepoId, sanitiseId } from './ids.js';
 import { findBrainRoot, findRepoRoot } from './layout.js';
+import { parseBackendDescriptor } from './backends/types.js';
 
 export { isValidRepoId } from './ids.js';
 
@@ -148,6 +149,7 @@ const BRAIN_KEYS = [
   'kind',
   'name',
   'description',
+  'backend',
   'repos',
   'kinds',
   'integrations',
@@ -201,6 +203,7 @@ export async function loadBrainConfig(brainRoot: string): Promise<BrainConfig> {
     okf_version: typeof data.okf_version === 'string' ? data.okf_version : String(data.okf_version ?? OKF_VERSION),
     kind: data.kind === 'org' ? 'org' : 'project',
     name: data.name,
+    backend: parseBackendDescriptor(data.backend, file),
     repos: Array.isArray(data.repos)
       ? (data.repos.filter((r) => isRecord(r) && typeof r.id === 'string') as BrainConfig['repos'])
       : [],
@@ -218,12 +221,22 @@ export async function saveBrainConfig(brainRoot: string, cfg: BrainConfig): Prom
 // Brain id
 // ---------------------------------------------------------------------------
 
+/** Non-git brain ref schemes (specs/16 "Credential references"): the id follows the scheme. */
+const BRAIN_REF_SCHEMES: readonly string[] = ['postgres:', 'nebula:'];
+
 /**
  * Brain id = last path segment of the remote without a `.git` suffix.
  * Works for ssh (`git@host:org/name.git`), https, `file://` and plain paths.
+ * A scheme ref (`postgres:<id>`, `nebula:<id>`) yields `<id>` directly.
  */
 export function brainIdFromRemote(remote: string): string {
   let s = remote.trim();
+  for (const scheme of BRAIN_REF_SCHEMES) {
+    if (s.startsWith(scheme)) {
+      s = s.slice(scheme.length);
+      break;
+    }
+  }
   // strip trailing slashes
   while (s.length > 1 && (s.endsWith('/') || s.endsWith('\\'))) s = s.slice(0, -1);
   if (s.endsWith('.git')) s = s.slice(0, -4);

@@ -7,7 +7,7 @@ This folder is the source of truth for **what** `thoughts` does and **why**. Cod
 | # | Spec | Covers | Status |
 |---|------|--------|--------|
 | 00 | [Overview](00-overview.md) | Problem, goals, non-goals, glossary, principles | Draft |
-| 01 | [Brain repository](01-brain-repo.md) | Layout of the shared "brain" git repo and how repos attach to it | Draft |
+| 01 | [Brain repository](01-brain-repo.md) | Layout of the shared brain workspace and how repos attach to it | Draft |
 | 02 | [`thoughts init`](02-cli-init.md) | Attaching a repo to a brain, installing the standard kit, tool setup | Draft |
 | 03 | [`thoughts sync`](03-cli-sync.md) | Pull/push of brain content, conflict handling | Draft |
 | 04 | [`thoughts status`](04-cli-status.md) | What is in flight across the project | Draft |
@@ -22,6 +22,9 @@ This folder is the source of truth for **what** `thoughts` does and **why**. Cod
 | 13 | [`thoughts attach-all`](13-cli-attach-all.md) | Cloning and registering every repo in a brain at once | Draft |
 | 14 | [`thoughts worktree`](14-cli-worktree.md) | Git worktrees with the brain symlink in place | Draft |
 | 15 | [Secret scanning](15-secret-scanning.md) | Keeping keys, tokens, and passwords out of the brain | Draft |
+| 16 | [Brain backends](16-brain-backends.md) | git, PostgreSQL, and NebulaGraph stores behind one brain layout; per-backend sync | Draft |
+| 17 | [Codebase graph](17-codegraph.md) | tree-sitter code graph per repo, updated by `sync`, surfaced in `status` | Draft |
+| 18 | [`thoughts help`](18-cli-help.md) | Grouped help output and `thoughts help <topic>` | Draft |
 
 ## Status legend
 

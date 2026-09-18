@@ -1,0 +1,94 @@
+-- thoughts nebula brain schema (specs/16 "Provisioning", specs/17 "Storage", D22, D23).
+-- Applied by `thoughts init` (connect + provision) and shipped with the CLI as
+-- src/brain/backends/schema/nebula.ngql. Every statement is idempotent
+-- (IF NOT EXISTS) so re-running provisioning is a no-op.
+--
+-- Representation (specs/16 "Representation", D22): the OKF document is the
+-- canonical unit, but the store representation MUST be native — frontmatter
+-- fields as `thought` VERTEX PROPERTIES, relations between thoughts as edges
+-- (LINKS_TO, SUPERSEDES), not as links buried in body text. A single markdown
+-- property would be non-conforming. The `document` property below is NOT that
+-- dump: it is the byte-exact copy of the canonical OKF document kept so the
+-- workspace can be rematerialised without reformatting anyone's YAML (comments,
+-- key order, quoting); every query path reads the properties and traverses the
+-- edges, and the full frontmatter travels as a JSON object literal in the
+-- `frontmatter` property (the nebula analogue of psql's jsonb column).
+--
+-- Conventions: one space holds one brain. `revision` is a per-brain,
+-- monotonically increasing integer (brain_meta.rev); every vertex a commit
+-- writes carries the revision it was written at, which is the base of the
+-- store-wins check (specs/16 sync table) and of pull. Vertex ids are 64-char
+-- sha256 hex strings, so vid_type is FIXED_STRING(64) and the space is created
+-- with the fixed partition/replica defaults below.
+--
+-- THOUGHTS_SPACE is replaced with the brain's space name by provisioning.
+
+CREATE SPACE IF NOT EXISTS THOUGHTS_SPACE (partition_num = 10, replica_factor = 1, vid_type = FIXED_STRING(64));
+USE THOUGHTS_SPACE;
+
+-- ---------------------------------------------------------------------------
+-- Thoughts (specs/16 "Representation", D22)
+-- ---------------------------------------------------------------------------
+
+CREATE TAG IF NOT EXISTS thought (path string, id string, repo_id string, kind string, zone string, title string, status string, created string, updated string, supersedes string, superseded_by string, stale_after string, frontmatter string, body string, document string, revision int64, author string);
+
+-- Workspace files that are not concepts (specs/01 layout): brain.yml, the
+-- generated index.md / log.md, `.thoughts-allow.yml`, codegraph index.md.
+CREATE TAG IF NOT EXISTS bundle_file (path string, document string, revision int64);
+
+-- ---------------------------------------------------------------------------
+-- Bounded change log (specs/16 "Sync and conflict semantics"): one vertex per
+-- change per revision, carrying the full document so `read(path, {revision})`
+-- and `scan --history` work inside the retained window. Pruned to the newest
+-- rows at commit: it is a change log for log.md regeneration and pull replays,
+-- NOT a full history — `scan --history` on a nebula brain says so.
+-- ---------------------------------------------------------------------------
+
+CREATE TAG IF NOT EXISTS change_log (path string, revision int64, change string, title string, by string, note string, occurred_at string, document string);
+
+CREATE TAG IF NOT EXISTS brain_commit (id int64, message string, author string, occurred_at string);
+
+-- Store metadata (specs/16 open question: last_rev lives workspace-side in
+-- meta.yml; the space keeps only the revision counter). Never a credential.
+CREATE TAG IF NOT EXISTS brain_meta (brain_id string, rev int64);
+
+-- ---------------------------------------------------------------------------
+-- Codegraph (specs/17 "Storage", D23): files/symbols/modules as tags, the
+-- containment and dependency relations as edge types. Vertex ids are the graph
+-- node hashes, so an IMPORTS_REPO edge between sibling repos' module vertices
+-- is an ordinary edge of the space and the cross-repo question is answered by
+-- a GO FROM ... OVER IMPORTS_REPO traversal.
+-- ---------------------------------------------------------------------------
+
+CREATE TAG IF NOT EXISTS code_file (repo_id string, name string, path string, sha string, language string, code_commit string, ord int64);
+CREATE TAG IF NOT EXISTS code_symbol (repo_id string, name string, path string, symbol_kind string, line int64, end_line int64, sha string, code_commit string, ord int64);
+CREATE TAG IF NOT EXISTS code_module (repo_id string, name string, manifest string, code_commit string, ord int64);
+CREATE TAG IF NOT EXISTS codegraph_meta (repo_id string, code_commit string, document string, meta_document string, revision int64);
+
+CREATE EDGE IF NOT EXISTS LINKS_TO (by string);
+CREATE EDGE IF NOT EXISTS SUPERSEDES ();
+CREATE EDGE IF NOT EXISTS CONTAINS (repo_id string, code_commit string);
+CREATE EDGE IF NOT EXISTS IMPORTS (repo_id string, code_commit string);
+CREATE EDGE IF NOT EXISTS CALLS (repo_id string, code_commit string);
+CREATE EDGE IF NOT EXISTS IMPORTS_REPO (repo_id string, code_commit string);
+
+-- Serving (specs/16 Representation rule 3): queries run as LOOKUP / GO FROM
+-- traversals over these indexes; a nebula brain never answers a queryable
+-- question by walking markdown.
+CREATE TAG INDEX IF NOT EXISTS thought_zone_idx ON thought(zone(20));
+CREATE TAG INDEX IF NOT EXISTS thought_repo_idx ON thought(repo_id(64));
+CREATE TAG INDEX IF NOT EXISTS thought_kind_idx ON thought(kind(40));
+CREATE TAG INDEX IF NOT EXISTS thought_status_idx ON thought(status(20));
+CREATE TAG INDEX IF NOT EXISTS thought_rev_idx ON thought(revision);
+CREATE TAG INDEX IF NOT EXISTS bundle_path_idx ON bundle_file(path(160));
+CREATE TAG INDEX IF NOT EXISTS change_path_idx ON change_log(path(160));
+CREATE TAG INDEX IF NOT EXISTS change_rev_idx ON change_log(revision);
+CREATE TAG INDEX IF NOT EXISTS commit_id_idx ON brain_commit(id);
+CREATE TAG INDEX IF NOT EXISTS meta_brain_idx ON brain_meta(brain_id(64));
+CREATE TAG INDEX IF NOT EXISTS cfile_repo_idx ON code_file(repo_id(64));
+CREATE TAG INDEX IF NOT EXISTS csymbol_repo_idx ON code_symbol(repo_id(64));
+CREATE TAG INDEX IF NOT EXISTS cmodule_repo_idx ON code_module(repo_id(64));
+CREATE EDGE INDEX IF NOT EXISTS contains_repo_idx ON CONTAINS(repo_id(64));
+CREATE EDGE INDEX IF NOT EXISTS imports_repo_idx ON IMPORTS(repo_id(64));
+CREATE EDGE INDEX IF NOT EXISTS calls_repo_idx ON CALLS(repo_id(64));
+CREATE EDGE INDEX IF NOT EXISTS imports_xrepo_idx ON IMPORTS_REPO(repo_id(64));

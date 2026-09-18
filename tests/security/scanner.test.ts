@@ -206,7 +206,6 @@ describe('known-format detectors: positive and placeholder-negative fixtures', (
     }
     expect(kinds('postgres://app:${DB_PASSWORD}@db.internal/orders')).toEqual([]);
     expect(kinds('postgres://app:<password>@db.internal/orders')).toEqual([]);
-    expect(kinds('postgres://db.internal:5432/orders')).toEqual([]);
     // a password that merely starts with `example` inside a real connection string is still a secret
     expect(kinds('postgres://app:example_prod_pw_here@db/orders')).toEqual(['connection string']);
   });
@@ -233,6 +232,30 @@ describe('known-format detectors: positive and placeholder-negative fixtures', (
       'https://git.internal/team/brain.git',
     ]) {
       expect(kinds(line), line).toEqual([]);
+    }
+  });
+
+  it('database connection strings: bare database URLs are blocked, a cred-ref never matches (specs/15, specs/16 brain.yml)', () => {
+    // bare URLs — no credentials, still a host credential in a shared brain
+    for (const url of ['postgres://db.internal:5432/orders', 'postgresql://db.internal:5432/orders', 'nebula://graph.internal:9669/acme_brain', 'mysql://db.internal:3306/orders']) {
+      const f = one(url);
+      expect(f, url).toMatchObject({ kind: 'database connection string', severity: 'block' });
+      expect(f.masked).not.toContain('db.internal');
+      expect(f.masked).not.toContain('graph.internal');
+    }
+    // the DSN form with a literal password
+    const dsnRaw = 'postgres host=db.internal user=app password=' + rep('hunter2', 3) + ' dbname=orders';
+    const dsn = one('connect: ' + dsnRaw);
+    expect(dsn.kind).toBe('database connection string');
+    expectNoLeak([dsn], rep('hunter2', 3));
+    expect(kinds('postgres host=db.internal user=app password=<your-password> dbname=orders')).toEqual([]);
+    // credentialed database URLs keep the more specific kinds that mask the password
+    expect(one('nebula://thoughts:' + rep('k3y', 6) + '@graph.internal:9669/acme_brain').kind).toBe('url credentials');
+    expect(one('postgres://app:' + rep('k3y', 6) + '@db.internal:5432/orders').kind).toBe('connection string');
+    // the placeholder-negative fixture specs/15 promises: the cred-ref written
+    // to global config (specs/16) is a ref, not a connection string
+    for (const ref of ['connection_ref: env:THOUGHTS_ACME_BRAIN_PG', 'ref: env:VAR', "keyref: 'acme-brain'", 'brain: postgres:acme-brain']) {
+      expect(kinds(ref), ref).toEqual([]);
     }
   });
 

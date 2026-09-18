@@ -10,7 +10,7 @@ Answer "what is in flight across the project?" from any attached repo. Combines 
 
 ```
 thoughts status [--repo <id>|--all] [--kind plans|specs|...] [--mine]
-                [--since <duration>] [--json] [--no-integrations]
+                [--since <duration>] [--json] [--no-integrations] [--no-graph]
 ```
 
 Default scope is `--all` (every repo in the brain) with the current repo listed first.
@@ -60,7 +60,19 @@ stale (2)
 | Current repo git (branch, dirty state) | local git | no |
 | Integrations (PR/ticket state) | network | yes, 5 min, in `~/.thoughts/cache/` |
 
+The integrations row is unimplemented until [10-integrations.md](10-integrations.md) ships: the `CHK-142` / `PR #88` columns stay empty, `--no-integrations` is accepted, and when integrations are absent one warning says so.
+
 `--no-integrations` skips network entirely and is implied when offline.
+
+## Codegraph
+
+When the brain holds a code graph for the attached repos ([17-codegraph.md](17-codegraph.md)), `status` reports it per repo:
+
+- **Counts** — `files · symbols · edges` extracted from that code repo.
+- **Staleness** — `fresh` when the stored graph commit matches the repo's `HEAD`; `stale — n commits ahead` when the repo has moved; `absent` when the repo was never extracted or is not a supported language.
+- **Cross-repo deps** — sibling repos whose modules this repo imports (matched at brain level by package name), i.e. which other repos' graphs touch the current repo.
+
+`--no-graph` skips the section entirely. `--json` carries a `graph` array with one object per repo (`files`, `symbols`, `edges`, `staleness`, `codeCommit`). Staleness is computed from git only; a repo whose graph was never built, or whose last extraction failed, shows `absent`. `status` never fails because of the graph.
 
 ## Cross-repo warnings
 
