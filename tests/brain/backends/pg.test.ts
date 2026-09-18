@@ -88,6 +88,29 @@ describe('pg backend: cred-ref resolution (specs/10, specs/16)', () => {
     expect(isCredRef('postgres://u:p@h/db')).toBe(false);
   });
 
+  it('an invalid ref that is a pasted connection string is echoed masked, never raw (specs/16)', () => {
+    const secret = 'sup3rs3cret';
+    let message = '';
+    let hint = '';
+    try {
+      parseCredRef(`nebula://user:${secret}@graph.internal:9669/acme`);
+    } catch (err) {
+      message = (err as Error).message;
+      hint = String((err as { hint?: string }).hint ?? '');
+    }
+    expect(message).not.toBe('');
+    expect(message + hint).not.toContain(secret);
+    expect(message).toContain('***');
+    // a ref-shaped value (env:/keyref:) is echoed as-is: it carries no secret
+    let plainRef = '';
+    try {
+      parseCredRef('file:/tmp/x');
+    } catch (err) {
+      plainRef = (err as Error).message;
+    }
+    expect(plainRef).toContain('file:/tmp/x');
+  });
+
   it('masks the password out of any connection string a message might carry', () => {
     const masked = maskConnectionString('postgres://thoughts:super-secret@db.internal:5432/acme_brain');
     expect(masked).not.toContain('super-secret');
@@ -344,6 +367,42 @@ describe('pg backend: store tables and metadata', () => {
     expect(await backend.loadGraphMeta('payments-api')).toContain('abc123');
     expect(client.store.graphNodes.get('payments-api')).toHaveLength(2);
     expect(client.store.graphEdges.get('payments-api')).toHaveLength(1);
+  });
+
+  it('push records the log entries at the revision this workspace committed, never at one a pull brought in', async () => {
+    const machine = await makeMachine('pg-push-rev');
+    const store = new FakePgStore();
+    const workspace = path.join(machine.root, 'ws');
+    fs.mkdirSync(workspace, { recursive: true });
+    const backend = new PgBackend({ brainId: 'acme', workspace, client: new FakePgClient(store) });
+    await backend.write('shared/specs/2026-09-10-a.md', DOC_A);
+    const committed = await backend.commit('thoughts(brain): 1 added');
+    expect(committed).toBe('2');
+
+    // a peer advances the store, and this machine pulls it in
+    const other = new PgBackend({ brainId: 'acme', workspace: path.join(machine.root, 'peer'), client: new FakePgClient(store) });
+    fs.mkdirSync(path.join(machine.root, 'peer'), { recursive: true });
+    await other.pull('0');
+    await other.write('shared/specs/2026-09-10-b.md', DOC_B);
+    await other.commit('thoughts(brain): peer');
+    const incoming = await backend.pull();
+    expect(incoming.map((c) => c.path)).toEqual(['shared/specs/2026-09-10-b.md']);
+    expect(await backend.revision()).toBe('3'); // lastRev has moved past the commit
+
+    await backend.push({
+      paths: [],
+      message: 'thoughts(brain): 1 added',
+      logEntries: [{ change: 'added', path: '/shared/specs/2026-09-10-a.md', title: 'A', by: 'human:qa' }],
+    });
+    // the entry sits on the commit-time revision, not the pulled one
+    const own = store.changeLog.find((r) => r.path === 'shared/specs/2026-09-10-a.md');
+    expect(own).toMatchObject({ revision: 2, change: 'added', title: 'A', by: 'human:qa' });
+    // and no foreign row was overwritten by the upsert: the peer's row is
+    // exactly as its commit wrote it, and no row was created at revision 3
+    // for this machine's path
+    const foreign = store.changeLog.find((r) => r.path === 'shared/specs/2026-09-10-b.md');
+    expect(foreign).toMatchObject({ revision: 3, change: 'added', by: null, note: null });
+    expect(store.changeLog.filter((r) => r.path === 'shared/specs/2026-09-10-a.md')).toHaveLength(1);
   });
 
   it('keeps the change log bounded without losing recent changes', async () => {

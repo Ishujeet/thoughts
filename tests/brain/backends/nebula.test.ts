@@ -22,6 +22,7 @@ import {
   thoughtVid,
   vertexToDoc,
   THOUGHT_COLUMNS,
+  NEBULA_SCHEMA_VERSION,
 } from '../../../src/brain/backends/nebula.js';
 import { nqLit, opOf, schemaStatements, splitNgqlStatements, substituteParams } from '../../../src/brain/backends/nebula-client.js';
 import * as git from '../../../src/git.js';
@@ -342,6 +343,47 @@ describe('nebula backend: connection failures are named, never fatal to the work
     expect(client.calls.some((c) => /CREATE TAG IF NOT EXISTS thought \(/.test(c.stmt))).toBe(true);
     expect(client.calls.some((c) => /CREATE EDGE IF NOT EXISTS IMPORTS_REPO/.test(c.stmt))).toBe(true);
   });
+
+  it('provision() retries a CREATE TAG while a fresh space settles, then rebuilds the serving indexes best effort', async () => {
+    const machine = await makeMachine('nebula-provision-retry');
+    const inner = new FakeNebulaClient();
+    // a fresh space refuses its first two CREATE TAG statements, then settles
+    let refused = 2;
+    const client = {
+      execute: async (stmt: string, params?: Record<string, unknown>) => {
+        if (refused > 0 && /^CREATE TAG (?!INDEX)/i.test(stmt)) {
+          refused -= 1;
+          throw new Error('Space not found: acme_brain');
+        }
+        return inner.execute(stmt, params);
+      },
+    } as unknown as FakeNebulaClient;
+    const backend = new NebulaBackend({ brainId: 'acme-brain', workspace: path.join(machine.root, 'ws'), client, space: 'acme_brain', retryDelayMs: 1 });
+    const result = await backend.provision();
+    expect(result.applied).toBe(true);
+    expect(refused).toBe(0); // both refusals were retried away
+    expect(inner.space.createdSpaces).toEqual(['acme_brain']);
+    // the serving indexes are rebuilt: one REBUILD statement per index the DDL declares
+    const rebuilds = inner.calls.map((c) => c.stmt).filter((s) => /^REBUILD (TAG|EDGE) INDEX /m.test(s));
+    const declared = schemaStatements('acme_brain').filter((s) => /^CREATE (TAG|EDGE) INDEX IF NOT EXISTS /m.test(s));
+    expect(rebuilds).toHaveLength(declared.length);
+    expect(rebuilds.some((s) => s.includes('REBUILD TAG INDEX thought_repo_idx'))).toBe(true);
+    expect(rebuilds.some((s) => s.includes('REBUILD EDGE INDEX imports_repo_idx'))).toBe(true);
+  });
+
+  it('provision() fails soft when an index rebuild is refused', async () => {
+    const machine = await makeMachine('nebula-provision-rebuild');
+    const inner = new FakeNebulaClient();
+    const client = {
+      execute: async (stmt: string, params?: Record<string, unknown>) => {
+        if (/^REBUILD /i.test(stmt)) throw new Error('Index not ready');
+        return inner.execute(stmt, params);
+      },
+    } as unknown as FakeNebulaClient;
+    const backend = new NebulaBackend({ brainId: 'acme-brain', workspace: path.join(machine.root, 'ws'), client, space: 'acme_brain', retryDelayMs: 1 });
+    await expect(backend.provision()).resolves.toMatchObject({ applied: true, version: NEBULA_SCHEMA_VERSION });
+    expect(await backend.upstreamRevision()).toBe('1'); // the seed still landed
+  });
 });
 
 describe('nebula backend: nGQL construction', () => {
@@ -419,6 +461,36 @@ describe('nebula backend: the change log is bounded and the history partial (spe
     expect(client.space.vertices.get('change_log')!.size).toBe(3);
     expect(CHANGE_LOG_LIMIT).toBeGreaterThan(0);
     expect(backend.historyMode).toBe('partial');
+  });
+
+  it('push records the log entries at the revision this workspace committed, never at one a pull brought in', async () => {
+    const machine = await makeMachine('nebula-push-rev');
+    const space = new FakeNebulaSpace();
+    const workspace = path.join(machine.root, 'ws');
+    fs.mkdirSync(workspace, { recursive: true });
+    const backend = new NebulaBackend({ brainId: 'acme', workspace, client: new FakeNebulaClient(space), now: () => new Date('2026-09-11T00:00:00.000Z') });
+    await backend.provision();
+    await backend.write('shared/specs/2026-09-10-a.md', DOC);
+    await backend.commit('thoughts(brain): 1 added');
+
+    const other = new NebulaBackend({ brainId: 'acme', workspace: path.join(machine.root, 'peer'), client: new FakeNebulaClient(space), now: () => new Date('2026-09-12T00:00:00.000Z') });
+    fs.mkdirSync(path.join(machine.root, 'peer'), { recursive: true });
+    await other.pull('0');
+    await other.write('shared/specs/2026-09-10-b.md', DOC.replace('Refund endpoint', 'Peer'));
+    await other.commit('thoughts(brain): peer');
+    await backend.pull();
+    expect(await backend.revision()).toBe('3'); // lastRev has moved past the commit
+
+    await backend.push({
+      paths: [],
+      message: 'thoughts(brain): 1 added',
+      logEntries: [{ change: 'added', path: '/shared/specs/2026-09-10-a.md', title: 'Refund endpoint', by: 'human:qa' }],
+    });
+    const own = [...space.vertices.get('change_log')!.entries()].find(([, props]) => props['path'] === 'shared/specs/2026-09-10-a.md');
+    expect(own![1]).toMatchObject({ revision: 2, change: 'added', by: 'human:qa' });
+    // the peer's row is untouched
+    const foreign = [...space.vertices.get('change_log')!.values()].find((props) => props['path'] === 'shared/specs/2026-09-10-b.md');
+    expect(foreign).toMatchObject({ revision: 3, by: 'thoughts' });
   });
 
   it('read() at a revision pruned from the bounded log returns undefined rather than a guess', async () => {

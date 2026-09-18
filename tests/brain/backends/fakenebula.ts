@@ -73,7 +73,7 @@ export class FakeNebulaClient {
     // A bare YIELD (the ping) and other scalar expressions.
     if (/^YIELD\b/i.test(body)) return { rows: [{ ok: 1 }] };
 
-    if (/^(CREATE SPACE|USE|CREATE TAG|CREATE EDGE|CREATE TAG INDEX|CREATE EDGE INDEX|DROP)\b/i.test(body)) {
+    if (/^(CREATE SPACE|USE|CREATE TAG|CREATE EDGE|CREATE TAG INDEX|CREATE EDGE INDEX|REBUILD (TAG|EDGE) INDEX|DROP)\b/i.test(body)) {
       const space = /CREATE SPACE IF NOT EXISTS ([A-Za-z0-9_`]+)/i.exec(body)?.[1];
       if (space !== undefined) this.space.createdSpaces.push(space.replaceAll('`', ''));
       return { rows: [] };

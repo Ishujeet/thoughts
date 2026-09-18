@@ -56,6 +56,34 @@ describe('init --backend nebula (specs/16 provisioning)', () => {
     expect(spaceRef.space).toBeUndefined();
   });
 
+  it('a pasted connection string as --connection-ref is refused masked, and never reaches any config (specs/16)', async () => {
+    const machine = await makeMachine('init-nebula-literal');
+    const repo = await makeCodeRepo(path.join(machine.root, 'code', 'demo'));
+    const secret = 'sup3rs3cret';
+    const err = await runInit(
+      { yes: true, backend: 'nebula', brain: 'nebula:acme-brain', connectionRef: `nebula://user:${secret}@graph.internal:9669/acme_brain`, json: true },
+      repo,
+    ).then(
+      () => undefined,
+      (e) => e,
+    );
+    expect((err as { exitCode?: number }).exitCode).toBe(1);
+    const text = String((err as Error).message) + String((err as { hint?: string }).hint ?? '');
+    // the value is echoed only masked, on stderr and in the error alike
+    expect(text).not.toContain(secret);
+    expect(text).toContain('***');
+    // nothing provisioned, nothing persisted: the literal never lands in the
+    // global config (specs/10: only the ref does)
+    expect(fs.existsSync(path.join(machine.root, '.thoughts', 'brains', 'acme-brain'))).toBe(false);
+    const globalConfigPath = path.join(machine.configDir, 'config.yml');
+    // init stopped before the global-config step: no literal was ever persisted
+    if (fs.existsSync(globalConfigPath)) {
+      const globalText = fs.readFileSync(globalConfigPath, 'utf8');
+      expect(globalText).not.toContain(secret);
+      expect(globalText).not.toContain('nebula://');
+    }
+  });
+
   it('with a connection ref: provisions the space, materialises the workspace, writes the scheme ref', async () => {
     const machine = await makeMachine('init-nebula');
     const repo = await makeCodeRepo(path.join(machine.root, 'code', 'demo'));

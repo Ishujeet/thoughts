@@ -28,6 +28,7 @@ import { preflight } from '../brain/preflight.js';
 import * as git from '../git.js';
 import * as out from '../output.js';
 import { ExitCode, ThoughtsError, type Frontmatter, type GlobalConfig, type SourceRef, type ThoughtLocation } from '../types.js';
+import type { WorkspaceChange } from '../brain/backends/types.js';
 import { assertRepoIdSegment, printWarnings, splitList } from './common.js';
 
 export interface StatusOptions {
@@ -287,10 +288,25 @@ export async function runStatus(opts: StatusOptions, cwd: string): Promise<Statu
   const filtered = wantedGroup === undefined ? rows : rows.filter((r) => r.group === wantedGroup);
   const filteredStale = wantedGroup === undefined ? staleRows : staleRows.filter((r) => r.group === wantedGroup);
 
-  // Local, uncommitted brain changes (specs/16: through the backend). The
-  // cross-repo warning sees every unsynced edit even under --repo; the
-  // displayed sections are scoped to the requested repo.
-  const dirty = await backend.dirty();
+  // Local, uncommitted brain changes (specs/16: through the backend). A
+  // conflict against an incoming store change is a SYNC outcome (specs/16
+  // exit-code table), never a failure of this read-only report: status warns
+  // and points at `thoughts sync`, and the workspace is left exactly as it
+  // was — the materialisation inside `dirty` never settles a conflict.
+  let dirty: WorkspaceChange[];
+  try {
+    dirty = await backend.dirty();
+  } catch (err) {
+    if (!(err instanceof ThoughtsError) || err.exitCode !== ExitCode.Conflict) throw err;
+    dirty = [];
+  }
+  const conflictInfo = await backend.conflictInfo().catch(() => undefined);
+  if (conflictInfo !== undefined && conflictInfo.conflicted.length > 0) {
+    warn(
+      `local brain edits conflict with the store: ${conflictInfo.conflicted.join(', ')} — resolve and run: thoughts sync` +
+        (conflictInfo.storeWins ? ' (store wins, specs/16; the lost edits must be re-applied)' : ''),
+    );
+  }
   const unsyncedAll = dirty
     .map((d) => d.path)
     .filter((p) => p.endsWith('.md') && locate('/' + p) !== undefined && !p.includes('/references/'))

@@ -9,6 +9,7 @@
 import { describe, expect, it } from 'vitest';
 import { NEBULA_SCHEMA_VERSION } from '../../../src/brain/backends/nebula.js';
 import { NEBULA_SPACE_TOKEN, loadNebulaSchema, schemaStatements, splitNgqlStatements } from '../../../src/brain/backends/nebula-client.js';
+import { nqId } from '../../../src/brain/backends/nebula-ngql.js';
 
 const ddl = loadNebulaSchema();
 const statements = splitNgqlStatements(ddl);
@@ -74,5 +75,35 @@ describe('schema/nebula.ngql: structure', () => {
     // byte-exact document rides along for materialisation
     expect(thought).toContain('frontmatter string');
     expect(thought).toContain('document string');
+  });
+
+  it('every tag/edge/property identifier round-trips nqId unchanged: the statement builders quote it away as-is', () => {
+    const checked: string[] = [];
+    const check = (name: string): void => {
+      expect(nqId(name), name).toBe(name);
+      checked.push(name);
+    };
+    for (const statement of statements) {
+      const create = /^CREATE (?:TAG|EDGE) IF NOT EXISTS ([A-Za-z_][A-Za-z0-9_]*) \(([^;]*)\);$/.exec(statement);
+      if (create !== null) {
+        check(create[1]!);
+        for (const prop of create[2]!.split(',')) {
+          const name = /^([A-Za-z_][A-Za-z0-9_]*)/.exec(prop.trim())?.[1];
+          if (name !== undefined) check(name);
+        }
+        continue;
+      }
+      const index = /^CREATE (?:TAG|EDGE) INDEX IF NOT EXISTS ([A-Za-z_][A-Za-z0-9_]*) ON ([A-Za-z_][A-Za-z0-9_]*)\((.*)\);$/.exec(statement);
+      if (index !== null) {
+        check(index[1]!);
+        check(index[2]!);
+        for (const col of index[3]!.split(',')) {
+          const name = /^([A-Za-z_][A-Za-z0-9_]*)/.exec(col.trim())?.[1];
+          if (name !== undefined) check(name);
+        }
+      }
+    }
+    // the whole schema went through the quoting check
+    expect(checked.length).toBeGreaterThan(50);
   });
 });

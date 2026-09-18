@@ -38,9 +38,8 @@ import {
   saveRepoConfig,
 } from '../brain/config.js';
 import { ensureRepoDirs, registerRepo, scaffoldBrain } from '../brain/layout.js';
+import { isCredRef, maskConnectionString } from '../brain/backends/credref.js';
 import { connectionRefFor, kindFromRef, resolveBackend } from '../brain/backends/resolve.js';
-import { PgBackend } from '../brain/backends/pg.js';
-import { defaultSpaceName } from '../brain/backends/nebula.js';
 import { isProvisionable } from '../brain/backends/types.js';
 import { writeDockerSnippet } from '../brain/backends/snippet.js';
 import { preflight } from '../brain/preflight.js';
@@ -423,6 +422,16 @@ export async function runInit(opts: InitOptions, cwd: string): Promise<InitResul
     remote = `${kind === 'nebula' ? 'nebula' : 'postgres'}:${brainId}`;
     brainRef.remote = remote;
   }
+  // specs/16 "Credential references": a --connection-ref is a *ref*, never the
+  // connection string itself. A pasted literal is refused here — before
+  // anything connects and before the global config could persist it — and the
+  // message carries the value only masked.
+  const connectionRef = opts.connectionRef?.trim();
+  if (kind !== 'git' && connectionRef !== undefined && connectionRef.length > 0 && !isCredRef(connectionRef)) {
+    throw new ThoughtsError(`invalid connection reference "${maskConnectionString(connectionRef)}"`, ExitCode.Validation, {
+      hint: '--connection-ref takes a cred-ref (env:<VARNAME> or keyref:<name>); set the connection string itself in the environment or the key store',
+    });
+  }
   const shownRemote = redactUrlCredentials(remote);
   // Resolve the backend before anything is written (specs/16): a missing
   // connection ref is exit 1 naming the env var, with nothing provisioned.
@@ -445,7 +454,10 @@ export async function runInit(opts: InitOptions, cwd: string): Promise<InitResul
   if (kind !== 'git') {
     // specs/16 "Provisioning": connect + provision, then materialise the
     // workspace. The store is reachable or init stops here with a snippet.
-    const shownRef = opts.connectionRef?.trim() ?? (await connectionRefFor({ brainId, workspace: brainRoot, brainRef: remote }, kind));
+    if (!isProvisionable(backend)) {
+      throw new ThoughtsError(`backend "${kind}" cannot provision a store`, ExitCode.Validation);
+    }
+    const shownRef = maskConnectionString(opts.connectionRef?.trim() ?? (await connectionRefFor({ brainId, workspace: brainRoot, brainRef: remote }, kind)));
     if (!write) {
       report(steps, `store ${kind} ${brainId}`, 'dry-run', `connection ${shownRef}`);
       report(steps, `brain workspace ${brainRoot}`, 'dry-run', 'would materialise from the store');
@@ -453,15 +465,10 @@ export async function runInit(opts: InitOptions, cwd: string): Promise<InitResul
       const existedBefore = fs.existsSync(brainRoot);
       fs.mkdirSync(brainRoot, { recursive: true });
       // The non-secret object name (specs/16 "brain.yml backend block"):
-      // psql's database, nebula's space.
-      const storeName =
-        kind === 'nebula'
-          ? descriptor?.space ?? defaultSpaceName(brainId)
-          : await (backend as PgBackend).databaseName();
+      // psql's database, nebula's space — the backend's own, never derived
+      // from the connection string.
+      const storeName = await backend.storeName();
       try {
-        if (!isProvisionable(backend)) {
-          throw new ThoughtsError(`backend "${kind}" cannot provision a store`, ExitCode.Validation);
-        }
         const provisioned = await backend.provision();
         report(steps, `store ${kind} ${storeName}`, 'up-to-date', `schema ${provisioned.version}, connection ${shownRef}`);
         await backend.materialise();
@@ -806,7 +813,7 @@ export async function runInit(opts: InitOptions, cwd: string): Promise<InitResul
     if (kind !== 'git') {
       // specs/10/16: the cred-ref (never the secret) lives in the global
       // config, outside the brain, so every later command resolves it.
-      const ref = opts.connectionRef?.trim() ?? (await connectionRefFor({ brainId, workspace: brainRoot, brainRef: remote }, kind));
+      const ref = connectionRef ?? (await connectionRefFor({ brainId, workspace: brainRoot, brainRef: remote }, kind));
       global.brains[brainId]['connection_ref'] = ref;
     }
     if (!global.default_brain) global.default_brain = brainId;

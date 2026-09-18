@@ -41,6 +41,15 @@ export function nqLit(value: unknown): string {
 }
 
 /**
+ * Quote an identifier (space / tag / edge / property name) for nGQL. Plain
+ * identifiers pass through bare, so existing statements are byte-identical;
+ * anything else is backtick-quoted with embedded backticks doubled.
+ */
+export function nqId(name: string): string {
+  return /^[A-Za-z][A-Za-z0-9_]*$/.test(name) ? name : `\`${name.replaceAll('`', '``')}\``;
+}
+
+/**
  * Fill a statement's `$name` placeholders from `params`. `$-` (pipe results)
  * and `$^` (referential) are nGQL syntax, not parameters, and pass through.
  * A placeholder with no parameter is a bug in the statement builder: it is

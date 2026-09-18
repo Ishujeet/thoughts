@@ -29,7 +29,9 @@ const CRED_REF_RE = /^(env|keyref):([A-Za-z0-9_.-]+)$/;
 export function parseCredRef(ref: string): CredRef {
   const m = CRED_REF_RE.exec(ref.trim());
   if (!m) {
-    throw new ThoughtsError(`invalid connection reference "${ref.trim()}"`, ExitCode.Validation, {
+    // The rejected value may be a pasted connection string: it is echoed only
+    // through maskConnectionString, so a password in it never reaches output.
+    throw new ThoughtsError(`invalid connection reference "${maskConnectionString(ref.trim())}"`, ExitCode.Validation, {
       hint: 'use env:<VARNAME> or keyref:<name> — never a connection string',
     });
   }

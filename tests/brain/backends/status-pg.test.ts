@@ -116,6 +116,30 @@ describe('status --json against a psql brain (specs/16 acceptance)', () => {
     for (const content of brainFiles) expect(content).not.toContain('sup3rs3cret');
     expect(fs.existsSync(path.join(brainRoot, 'brain.yml'))).toBe(true);
   });
+
+  it('a store change under an uncommitted local edit is a warning pointing at sync, never exit 4, and nothing is materialised', async () => {
+    const thoughtRel = 'repos/payments-api/specs/2026-09-10-refund.md';
+    const thoughtAbs = path.join(brainRoot, thoughtRel);
+    const localDoc = fs.readFileSync(thoughtAbs, 'utf8').replace('Refund endpoint', 'Local rewrite');
+    fs.writeFileSync(thoughtAbs, localDoc);
+    // the store moves on underneath the local edit
+    const peerWorkspace = path.join(machineRoot, 'peer');
+    fs.mkdirSync(peerWorkspace, { recursive: true });
+    const peer = new PgBackend({ brainId: 'acme-brain', workspace: peerWorkspace, client: new FakePgClient(store), now: () => new Date('2026-09-13T00:00:00.000Z') });
+    await peer.pull('0');
+    await peer.write(thoughtRel, DOC.replace('Refund endpoint', 'Peer rewrite'));
+    await peer.commit('thoughts(payments-api): peer edit');
+
+    // status is read-only: the conflict is a sync outcome (specs/16), reported,
+    // not thrown — and the workspace is left exactly as it was
+    const result = await runStatus({ json: true, brain: 'acme-brain', graph: false, now: new Date('2026-09-14T00:00:00.000Z') }, machineRoot);
+    expect(result.warnings.join('\n')).toContain('thoughts sync');
+    expect(result.warnings.join('\n')).toContain(thoughtRel);
+    expect(fs.readFileSync(thoughtAbs, 'utf8')).toBe(localDoc);
+    expect(result.unsynced).toContain(thoughtRel);
+    // the read did not materialise the store's side: last_rev is untouched
+    expect(fs.readFileSync(path.join(brainRoot, 'meta.yml'), 'utf8')).toContain('last_rev: 3');
+  });
 });
 
 function readAllFiles(root: string): string[] {

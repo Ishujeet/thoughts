@@ -263,6 +263,12 @@ export class PgBackend implements BrainBackend {
   private connecting: Promise<PgClientLike> | undefined;
   private metaLoaded = false;
   private lastRev = 0;
+  /**
+   * The revision `commit()` created, kept for `push` (specs/16): the log
+   * entries attach to the revision this workspace wrote, even when an
+   * intervening `pull` has advanced `lastRev` past it.
+   */
+  private commitRev: number | undefined;
   private readonly stamps = new Map<string, FileStamp>();
   /** Workspace-relative paths this run changed. */
   private readonly pending = new Map<string, 'written' | 'deleted'>();
@@ -334,6 +340,14 @@ export class PgBackend implements BrainBackend {
       });
     }
     return resolveCredRef(ref);
+  }
+
+  /**
+   * The non-secret object name this store lives in (specs/16 brain.yml block)
+   * — the seam `init` provisions through (ProvisionableBackend).
+   */
+  async storeName(): Promise<string> {
+    return this.databaseName();
   }
 
   /**
@@ -475,7 +489,16 @@ export class PgBackend implements BrainBackend {
     } catch {
       return;
     }
-    await this.pull(undefined);
+    try {
+      await this.pull(undefined);
+    } catch (err) {
+      // A store change under an uncommitted local edit is the conflict of
+      // specs/16 — but materialising is a read-side step (status, dirty): it
+      // must not overwrite the workspace mid-read. Leave the local edit in
+      // place; the conflict surfaces at commit, where it is a sync outcome.
+      if (err instanceof ThoughtsError && err.exitCode === ExitCode.Conflict) return;
+      throw err;
+    }
   }
 
   // -- BrainBackend --------------------------------------------------------
@@ -661,6 +684,7 @@ export class PgBackend implements BrainBackend {
    */
   async commit(message: string): Promise<string | undefined> {
     await this.loadWorkspaceMeta();
+    this.commitRev = undefined;
     const store = await this.storeSnapshot();
     const head = await this.headRev();
     const workspace = new Set(await listWorkspaceFiles(this.workspace));
@@ -764,6 +788,7 @@ export class PgBackend implements BrainBackend {
     }
 
     this.lastRev = rev;
+    this.commitRev = rev;
     await this.saveWorkspaceMeta();
     this.pending.clear();
     this.pendingDocs.clear();
@@ -797,11 +822,13 @@ export class PgBackend implements BrainBackend {
   /**
    * The transport step: the transaction already wrote the store (specs/16), so
    * the log entries attach to the revision this workspace committed — even if
-   * a pull in between brought someone else's revision forward.
+   * a pull in between brought someone else's revision forward. Writing them at
+   * that revision can never overwrite a foreign change_log row: (path,
+   * revision) is this workspace's own pair.
    */
   async push(input: PushInput): Promise<PushResult> {
     const client = await this.clientOrThrow();
-    const rev = this.lastRev > 0 ? this.lastRev : await this.headRev();
+    const rev = this.commitRev ?? (this.lastRev > 0 ? this.lastRev : await this.headRev());
     const now = (this.opts.now ?? ((): Date => new Date()))();
     for (const entry of input.logEntries) {
       await this.appendChange(client, entry.path.replace(/^\/+/, ''), rev, entry.change, entry.title, entry, now, true);

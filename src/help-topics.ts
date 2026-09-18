@@ -132,9 +132,9 @@ Detectors, all on by default:
                           content
   2. known formats        AWS, GitHub, GitLab, Slack, Google, Stripe,
                           Anthropic, OpenAI, JWT, private key blocks, database
-                          connection strings (any postgres:// or mysql:// URL
-                          is block severity; a cred-ref like env:VAR does not
-                          fire)
+                          connection strings (any postgres://, mysql:// or
+                          nebula:// URL is block severity; a cred-ref like
+                          env:VAR does not fire)
   3. generic assignment   password|secret|token|api_key|... = <12+ chars> —
                           placeholder values (<...>, \${...}, {{...}}, xxx...,
                           changeme, REDACTED) are not flagged

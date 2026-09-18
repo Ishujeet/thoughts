@@ -42,6 +42,7 @@ import { locate } from '../location.js';
 import { parseFrontmatter } from '../okf.js';
 import { regenerate } from '../generate.js';
 import { NebulaHttpClient, nqLit, schemaStatements, tagged, type NebulaClientLike } from './nebula-client.js';
+import { nqId as ngqlNqId } from './nebula-ngql.js';
 import { listWorkspaceThoughts, readWorkspaceFile, writeWorkspaceFile } from './workspace.js';
 import { DEFAULT_NEBULA_CONNECTION_ENV, maskConnectionString, resolveCredRef } from './credref.js';
 import {
@@ -283,22 +284,20 @@ export function extractThoughtRelations(relPath: string, doc: string): { superse
 // ---------------------------------------------------------------------------
 
 /** Quote an identifier (space / tag / edge / property name) for nGQL. */
-export function nqId(name: string): string {
-  return /^[A-Za-z][A-Za-z0-9_]*$/.test(name) ? name : `\`${name.replaceAll('`', '``')}\``;
-}
+export const nqId = ngqlNqId;
 
 /** Multi-row INSERT VERTEX — one round-trip per batch (specs/16 "Batched nGQL writes"). */
 export function ngqlUpsertVertices(op: string, tag: string, columns: readonly string[], rows: VertexRow[]): string {
   if (rows.length === 0) return '';
   const values = rows.map((r) => `${nqLit(r.vid)}:(${r.values.map(nqLit).join(', ')})`).join(', ');
-  return tagged(op, `INSERT VERTEX ${nqId(tag)}(${columns.join(', ')}) VALUES ${values}`);
+  return tagged(op, `INSERT VERTEX ${nqId(tag)}(${columns.map(nqId).join(', ')}) VALUES ${values}`);
 }
 
 /** Multi-row INSERT EDGE. */
 export function ngqlUpsertEdges(op: string, edge: string, columns: readonly string[], rows: EdgeRow[]): string {
   if (rows.length === 0) return '';
   const values = rows.map((r) => `${nqLit(r.src)}->${nqLit(r.dst)}:(${r.values.map(nqLit).join(', ')})`).join(', ');
-  return tagged(op, `INSERT EDGE ${nqId(edge)}(${columns.join(', ')}) VALUES ${values}`);
+  return tagged(op, `INSERT EDGE ${nqId(edge)}(${columns.map(nqId).join(', ')}) VALUES ${values}`);
 }
 
 /** Multi-row DELETE VERTEX (WITH EDGE removes the edges that touch them). */
@@ -426,6 +425,11 @@ export interface NebulaBackendOptions {
   client?: NebulaClientLike;
   /** Test seam: connect with the resolved connection string. */
   connect?: (connectionString: string) => Promise<NebulaClientLike>;
+  /**
+   * Test seam: how long provisioning waits between CREATE TAG/EDGE retries
+   * while a fresh space settles (default 1s).
+   */
+  retryDelayMs?: number;
   now?: () => Date;
   author?: string;
 }
@@ -444,6 +448,12 @@ export class NebulaBackend implements BrainBackend {
   private connecting: Promise<NebulaClientLike> | undefined;
   private metaLoaded = false;
   private lastRev = 0;
+  /**
+   * The revision `commit()` created, kept for `push` (specs/16): the log
+   * entries attach to the revision this workspace wrote, even when an
+   * intervening `pull` has advanced `lastRev` past it.
+   */
+  private commitRev: number | undefined;
   private readonly stamps = new Map<string, FileStamp>();
   /** Workspace-relative paths this run changed. */
   private readonly pending = new Map<string, 'written' | 'deleted'>();
@@ -516,20 +526,41 @@ export class NebulaBackend implements BrainBackend {
     return this.space;
   }
 
-  /** Apply `schema/nebula.ngql` with this brain's space (specs/16 "Provisioning"). */
+  /**
+   * Apply `schema/nebula.ngql` with this brain's space (specs/16
+   * "Provisioning"). A space created moments ago needs ~2 heartbeats before
+   * its first CREATE TAG succeeds, so those statements get a short bounded
+   * retry; the index rebuilds that follow are best effort — a failed rebuild
+   * costs index-backed performance, never provisioning.
+   */
   async provision(): Promise<{ applied: boolean; version: string }> {
     const client = await this.clientOrThrow();
     const statements = schemaStatements(this.space);
     for (const stmt of statements) {
-      await client.execute(stmt);
-      // A space created moments ago needs ~2 heartbeats before its tags can be
-      // created; the docker snippet printed on an unreachable store tells the
-      // user to wait for the cluster before re-running init.
+      if (/^CREATE (TAG|EDGE) /i.test(stmt)) await retryWhileSpaceSettles(() => client.execute(stmt), this.opts.retryDelayMs);
+      else await client.execute(stmt);
     }
+    await this.rebuildIndexes(client);
     // Seed the revision counter at 1 — the analogue of the git brain's root
     // commit and of pg.sql's `INSERT INTO meta ... 'rev', '1'`.
     if ((await this.headRev()) === 0) await this.setHeadRev(1, 'seed');
     return { applied: true, version: NEBULA_SCHEMA_VERSION };
+  }
+
+  /**
+   * `REBUILD TAG INDEX` / `REBUILD EDGE INDEX` for every index the shipped DDL
+   * declares (specs/16 Representation rule 3: serving traverses these indexes,
+   * and `LOOKUP` returns nothing until they are built). Best effort, one
+   * statement each: any failure is tolerated and the next `init` re-runs it.
+   */
+  private async rebuildIndexes(client: NebulaClientLike): Promise<void> {
+    for (const stmt of rebuildStatements(schemaStatements(this.space))) {
+      try {
+        await client.execute(stmt);
+      } catch {
+        // fail soft: the index exists; only its data is not rebuilt yet
+      }
+    }
   }
 
   // -- workspace state -----------------------------------------------------
@@ -859,6 +890,7 @@ export class NebulaBackend implements BrainBackend {
    */
   async commit(message: string): Promise<string | undefined> {
     await this.loadWorkspaceMeta();
+    this.commitRev = undefined;
     const store = await this.storeSnapshot();
     const head = await this.headRev();
     const workspace = new Set(await listWorkspaceThoughts(this.workspace));
@@ -953,6 +985,7 @@ export class NebulaBackend implements BrainBackend {
     await this.pruneChangeLog();
 
     this.lastRev = rev;
+    this.commitRev = rev;
     await this.saveWorkspaceMeta();
     this.pending.clear();
     this.pendingDocs.clear();
@@ -979,7 +1012,7 @@ export class NebulaBackend implements BrainBackend {
     const row = changeRow(this.brainId, rel, rev, change, entry?.title ?? path.posix.basename(rel, '.md'), entry?.by, entry?.note, now, undefined);
     await this.execute(
       'change_upsert',
-      `INSERT VERTEX change_log(${CHANGE_COLUMNS.join(', ')}) VALUES ${nqLit(row.vid)}:(${row.values.map(nqLit).join(', ')})`,
+      `INSERT VERTEX ${nqId('change_log')}(${CHANGE_COLUMNS.map(nqId).join(', ')}) VALUES ${nqLit(row.vid)}:(${row.values.map(nqLit).join(', ')})`,
     );
   }
 
@@ -987,11 +1020,12 @@ export class NebulaBackend implements BrainBackend {
    * The transport step (specs/16): the batched writes above already landed, so
    * the log entries attach to the revision this workspace committed — as
    * change-log rows with the entry's title/by/note, which is what `log.md` is
-   * regenerated from.
+   * regenerated from. A pull in between has only advanced `lastRev`; the
+   * commit-time revision is what these rows carry.
    */
   async push(input: PushInput): Promise<PushResult> {
     const now = (this.opts.now ?? ((): Date => new Date()))();
-    const rev = this.lastRev > 0 ? this.lastRev : await this.headRev();
+    const rev = this.commitRev ?? (this.lastRev > 0 ? this.lastRev : await this.headRev());
     for (const entry of input.logEntries) {
       await this.appendChange(entry.path.replace(/^\/+/, ''), rev, entry.change, entry, now);
     }
@@ -1373,6 +1407,38 @@ export class NebulaBackend implements BrainBackend {
 // ---------------------------------------------------------------------------
 // helpers
 // ---------------------------------------------------------------------------
+
+/** Bounded retry while a fresh space settles: ~2 heartbeats before CREATE TAG succeeds (specs/16). */
+const CREATE_RETRIES = 3;
+const CREATE_RETRY_MS = 1_000;
+const SLEEP = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function retryWhileSpaceSettles(run: () => Promise<unknown>, delayMs = CREATE_RETRY_MS): Promise<void> {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      await run();
+      return;
+    } catch (err) {
+      if (attempt >= CREATE_RETRIES - 1) throw err;
+      if (delayMs > 0) await SLEEP(delayMs);
+    }
+  }
+}
+
+/**
+ * The `REBUILD TAG INDEX` / `REBUILD EDGE INDEX` statements for the index
+ * declarations of the shipped DDL, in declaration order. A fresh space needs
+ * them before `LOOKUP` serves anything (specs/16 Representation rule 3).
+ */
+export function rebuildStatements(statements: readonly string[]): string[] {
+  const rebuilds: string[] = [];
+  for (const stmt of statements) {
+    const m = /^CREATE (TAG|EDGE) INDEX IF NOT EXISTS ([A-Za-z_][A-Za-z0-9_]*)/im.exec(stmt.replace(/^--.*$/gm, '').trim());
+    if (m === null) continue;
+    rebuilds.push(`REBUILD ${m[1] === 'EDGE' ? 'EDGE' : 'TAG'} INDEX ${nqId(m[2]!)}`);
+  }
+  return rebuilds;
+}
 
 function remoteDocOf(store: StoreSnapshot, rel: string): string | undefined {
   return store.thoughts.get(rel)?.document ?? store.files.get(rel)?.document;
