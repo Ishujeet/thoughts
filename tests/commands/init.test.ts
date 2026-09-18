@@ -53,10 +53,11 @@ describe('init --yes: fresh repo + new brain (O1)', () => {
     const link = path.join(repo, 'thoughts');
     expect(fs.lstatSync(link).isSymbolicLink()).toBe(true);
     expect(fs.realpathSync(link)).toBe(fs.realpathSync(r.brainRoot));
-    expect(fs.readdirSync(path.join(link, 'repos', 'payments-api')).sort()).toEqual(['decisions', 'index.md', 'plans', 'prs', 'research', 'specs']);
+    expect(fs.readdirSync(path.join(link, 'repos', 'payments-api')).sort()).toEqual(['codegraph', 'decisions', 'index.md', 'plans', 'prs', 'research', 'specs']);
     const log = (await git.git(['log', '--format=%s'], { cwd: link })).stdout.trim().split('\n');
     expect(log[log.length - 1]).toBe('thoughts: create brain acme-brain');
-    expect(log[0]).toMatch(/^thoughts\(payments-api\): 0 added, 0 updated$/);
+    // The codegraph commit (specs/17) lands after the content commit.
+    expect(log.find((l) => /^thoughts\(payments-api\):/.test(l))).toMatch(/^thoughts\(payments-api\): 0 added, 0 updated$/);
     expect(r.sync?.pushed).toBe(true);
     // ...and the push reached the brain at --brain path.
     expect((await git.git(['log', '--format=%s', '-1'], { cwd: brainPath })).stdout.trim()).toBe(log[0]);

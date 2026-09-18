@@ -44,6 +44,7 @@ High-confidence formats with a recognisable prefix or structure. Initial set:
 | JWT | `eyJ` + `.` + `eyJ` + `.` + signature |
 | Private key block | `-----BEGIN (RSA\|EC\|DSA\|OPENSSH\|PGP\|ENCRYPTED)? PRIVATE KEY-----` |
 | Connection string with password | `<scheme>://<user>:<password>@<host>` for `postgres`, `mysql`, `mongodb(+srv)`, `redis`, `amqp`, `mssql`, `jdbc:` |
+| Database connection string | Any `postgres://`, `postgresql://`, `nebula://`, or `mysql://` URL, or a DSN carrying a literal `password=<value>`. Severity: **block**. Does not fire on a cred-ref as written to global config ([16-brain-backends.md](16-brain-backends.md)), e.g. `ref: env:THOUGHTS_ACME_BRAIN_PG` (placeholder-negative fixture) |
 | Cloud connection strings | `AccountKey=`, `SharedAccessSignature=`, `DefaultEndpointsProtocol=` |
 
 ### 3. Generic assignment pattern
@@ -79,12 +80,14 @@ security:
 | Point | Mode | On failure |
 |-------|------|------------|
 | `thoughts sync`, before validate | staged and modified files | **Refuses to commit.** Exit 7. No bypass flag. |
-| `pre-commit` hook in the **brain clone** | staged files | Refuses the commit. Installed by `init` when it clones the brain; this clone is CLI-owned, so the hook is not opt-in (unlike hooks in code repos). Protects against raw `git commit` inside `~/.thoughts/brains/`. |
+| `pre-commit` hook in the **brain clone** (git backend only) | staged files | Refuses the commit. Installed by `init` when it clones the brain; this clone is CLI-owned, so the hook is not opt-in (unlike hooks in code repos). Protects against raw `git commit` inside `~/.thoughts/brains/`. |
 | `thoughts new --set k=v` | the values | Refuses to create the file. |
 | `thoughts init`, after writing `.thoughts.yml` and `brain.yml` | those two files | Refuses to continue. |
 | `thoughts scan` | whole brain (`--history` walks every commit) | Reports; exit 7 if any block-severity finding. |
 | `thoughts lint` | whole working tree | Same as `scan` without `--history`. |
 | `thoughts templates lint` | template files | Fails lint. |
+
+For a non-git brain there is no `pre-commit` hook — there is no git store to hook. The scan then runs on `sync`, `init`, `new --set`, and `scan`/`lint` only; hand edits to the workspace between syncs are not scanned until the next `sync` (see [16-brain-backends.md](16-brain-backends.md)).
 
 ## Output
 

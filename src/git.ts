@@ -40,6 +40,8 @@ export interface StatusEntry {
   path: string;
   /** Two-character porcelain code, e.g. `??`, ` M`, `A `, `D `, `UU`. */
   code: string;
+  /** Rename/copy: the original path, so a rename can replace the old entry. */
+  from?: string;
 }
 
 function gitEnv(extra?: Record<string, string>): NodeJS.ProcessEnv {
@@ -126,6 +128,11 @@ export async function statusPorcelain(cwd: string): Promise<StatusEntry[]> {
     if (code[0] === 'R' || code[0] === 'C') {
       // rename/copy: the next NUL-separated field is the original path.
       i += 1;
+      const from = parts[i];
+      const entry: StatusEntry = { path: p, code };
+      if (from !== undefined && from.length > 0) entry.from = from;
+      entries.push(entry);
+      continue;
     }
     entries.push({ path: p, code });
   }
@@ -225,7 +232,7 @@ export async function userEmail(cwd: string): Promise<string | undefined> {
   }
 }
 
-/** `git diff --name-status <from>..<to>` parsed into {code, path}. */
+/** `git diff --name-status <from>..<to>` parsed into {code, path} (renames keep the original path in `from`). */
 export async function diffNameStatus(cwd: string, from: string, to = 'HEAD'): Promise<StatusEntry[]> {
   const r = await git(['diff', '--name-status', '-z', `${from}..${to}`], { cwd });
   const parts = r.stdout.split('\0');
@@ -238,7 +245,7 @@ export async function diffNameStatus(cwd: string, from: string, to = 'HEAD'): Pr
     if (code[0] === 'R' || code[0] === 'C') {
       const newPath = parts[i + 2];
       if (newPath === undefined) break;
-      entries.push({ path: newPath, code: code[0]! });
+      entries.push({ path: newPath, code: code[0]!, from: p });
       i += 2;
     } else {
       entries.push({ path: p, code });

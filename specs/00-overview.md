@@ -4,7 +4,7 @@ Status: Draft
 
 ## One-line description
 
-`thoughts` is a CLI that attaches a shared, git-backed "brain" to every repository in a multi-repo project so that AI coding assistants (and humans) plan, spec, research, and commit with the context of the **whole** project instead of one repo.
+`thoughts` is a CLI that attaches a shared "brain" to every repository in a multi-repo project — a plain git repository by default, with opt-in alternative backends (D22) — so that AI coding assistants (and humans) plan, spec, research, and commit with the context of the **whole** project instead of one repo.
 
 ## The problem
 
@@ -19,7 +19,7 @@ Context lives in people's heads, in chat, or in a wiki nobody updates. The resul
 
 ## The idea
 
-Give the project one **brain**: a plain git repository holding plans, specs, research, decisions, and an index of all of it. Every code repo in the project gets:
+Give the project one **brain**: a plain git repository (by default; other backends are opt-in, D22) holding plans, specs, research, decisions, and an index of all of it. Every code repo in the project gets:
 
 1. a symlink (`<repo>/thoughts`) to a local clone of the brain,
 2. a small standard kit (commands, skills, agents, `CLAUDE.md`-style instructions) that tells the AI assistant to read and write the brain at the right moments,
@@ -32,7 +32,7 @@ Nothing in the brain is proprietary to any one AI tool. It is markdown with YAML
 - **G1. Whole-project context, everywhere.** From any repo, an assistant can find what other repos are planning, building, or have decided.
 - **G2. Zero disruption.** Attaching a brain never changes how a repo builds, tests, or ships. All additions are opt-in files and a gitignored symlink.
 - **G3. Tool-agnostic.** First-class support for claude-code, codex, and pi. Adding a fourth tool means writing an adapter, not redesigning the brain.
-- **G4. Plain files, plain git.** No server, no database, no lock-in. The brain is readable with `cat` and diffable with `git`.
+- **G4. Plain files by default, no lock-in.** The default brain is a plain git repository readable with `cat` and diffable with `git`. Alternative backends (PostgreSQL, NebulaGraph) are opt-in; thoughts remain OKF markdown in every backend, and the git default never requires a server.
 - **G5. Convention with escape hatches.** Sensible default templates and layout, but an org can bring its own templates and layout.
 - **G6. Observable.** `thoughts status` answers "what is in flight across the project?" in one command.
 
@@ -41,7 +41,7 @@ Nothing in the brain is proprietary to any one AI tool. It is markdown with YAML
 - Not a wiki, ticketing system, or chat replacement. Integrations link to those; the brain does not replace them.
 - Not a code search tool. `thoughts search` searches the brain, not source code.
 - Not a hosted service. No accounts, no SaaS backend.
-- Not real-time collaboration. Sync is git-based and explicit (or on a timer); conflicts are resolved with git.
+- Not real-time collaboration. Sync is explicit (or on a timer); in the default git backend it is git-based and conflicts are resolved with git (D22).
 - Not an AI agent itself. The CLI **never** calls an LLM. It arranges files so that other tools' agents work better. This is a design constraint, not a v1 limitation (decision D5). A CLI that needed a model would defeat its purpose: the assistants already have one.
 - Not a Windows tool in v1. macOS and Linux only (D4).
 
@@ -64,7 +64,7 @@ Nothing in the brain is proprietary to any one AI tool. It is markdown with YAML
 
 | Term | Meaning |
 |------|---------|
-| **Brain** | The shared git repository holding all thoughts for a project. One brain per project (or per org, containing several projects). |
+| **Brain** | The shared store holding all thoughts for a project: a plain git repository in the default backend (D22). One brain per project (or per org, containing several projects). |
 | **Thought** | Any document in the brain: plan, spec, research note, decision record, PR description, etc. Each thought is an OKF concept (a markdown file with frontmatter). |
 | **Repo** | A code repository attached to a brain. |
 | **Attach** | The act of linking a repo to a brain via `thoughts init`. |
@@ -72,6 +72,7 @@ Nothing in the brain is proprietary to any one AI tool. It is markdown with YAML
 | **Adapter** | Tool-specific logic that knows where claude-code / codex / pi expect instructions, commands, and skills. |
 | **Template** | A file under `<brain>/templates/` (or the built-in default set) used by `thoughts new` and by the standard kit's commands. |
 | **In flight** | A thought with `status: draft` or an integration item (PR, ticket) that is open and linked from a thought. |
+| **Backend** | The durable store and sync transport of a brain (git, psql, nebula), chosen at `init`. |
 
 ## Open questions
 

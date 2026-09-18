@@ -122,6 +122,22 @@ export interface RepoConfig {
 }
 
 export type BrainKind = 'project' | 'org';
+
+/** Which store a brain lives in (specs/16 "Backend kinds"). git is the default. */
+export type BackendKind = 'git' | 'psql' | 'nebula';
+
+/**
+ * Non-secret `backend:` block of `brain.yml` (specs/16). Only the *names* of
+ * database/space objects; a connection string here is a scanner finding.
+ */
+export interface BackendDescriptor {
+  kind: BackendKind;
+  /** psql only: database name. */
+  database?: string;
+  /** nebula only: space name. */
+  space?: string;
+}
+
 export type TemplateSource = 'builtin' | 'brain' | `path:${string}` | `git:${string}`;
 export type CustomPatternSeverity = 'block' | 'warn';
 
@@ -134,6 +150,11 @@ export interface CustomPattern {
 export interface BrainRepoEntry {
   id: string;
   remote?: string;
+  /**
+   * The repo's package name, used to match cross-repo codegraph edges
+   * (specs/17 "Cross-repo edges"). Optional; a manifest name is a fallback.
+   */
+  package?: string;
   [key: string]: unknown;
 }
 
@@ -149,6 +170,8 @@ export interface BrainConfig {
   kind: BrainKind;
   name: string;
   description?: string;
+  /** Store backend (specs/16). Absent means the git default. */
+  backend?: BackendDescriptor;
   repos: BrainRepoEntry[];
   /** Kinds in declared order. Defaults to DEFAULT_KINDS when absent. */
   kinds: Record<string, KindConfig>;

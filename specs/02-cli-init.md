@@ -13,6 +13,7 @@ thoughts init [--brain <url|id>] [--repo-id <id>] [--tools claude-code,codex,pi]
               [--templates builtin|brain|path:<dir>|git:<url>]
               [--skills all|none|<name,...>] [--no-agents] [--no-commands]
               [--integrations github,azure-devops,jira]
+              [--backend git|psql|nebula] [--connection-ref <ref>]
               [--yes] [--force] [--dry-run]
 ```
 
@@ -27,6 +28,23 @@ The guide is **per-tool sub-guides**, not one long wizard:
 3. A final summary and the initial sync.
 
 Sub-guides are the unit of re-runnability: `thoughts init --tools codex` on an attached repo runs only the codex sub-guide.
+
+## Backend selection
+
+The brain's backend (D22) is chosen at `init` and is immutable in v1; full per-backend behaviour in [16-brain-backends.md](16-brain-backends.md).
+
+- Default is `git`. `--backend git|psql|nebula` overrides it; the interactive guide asks the same question in the common section.
+- A non-git backend needs a **connection reference**: `--connection-ref env:VAR|keyref:name`, pointing at the OS keychain or an environment variable — never a literal connection string (see [15-secret-scanning.md](15-secret-scanning.md)). With `--yes` and a non-git backend and no connection ref (flag or already recorded in global config), `init` exits 1 naming the env var it expected.
+- Steps map onto each backend like this:
+
+| Step | `git` | `psql` | `nebula` |
+|------|-------|--------|----------|
+| Preflight | platform, `git`, work tree, remote reachable | platform, `git`, work tree, database reachable | platform, `git`, work tree, graph space reachable |
+| 1. Resolve the brain | clone/fetch the remote | connect + provision DDL, materialise the workspace | provision schema (space/tags/edges), materialise the workspace |
+| Pre-commit secret hook | installed in the brain clone (CLI-owned) | not installed (no git store) | not installed (no git store) |
+| 8. Initial sync | commit + push to the remote | store seeded in one transaction | store seeded |
+
+For a non-git backend whose store is not configured, step 1 prints a ready-to-run docker compose snippet (written to `~/.thoughts/backends/<brain-id>/docker-compose.yml`) and exits 2.
 
 `init` always symlinks the **whole** brain, so every repo's thoughts are visible from here. What it registers with the brain is only the code repo you are standing in. Cloning and registering every code repo listed in `brain.yml` on a fresh machine is a separate command, [`thoughts attach-all`](13-cli-attach-all.md).
 
@@ -152,7 +170,7 @@ Re-running `init` on an attached repo:
 |------|---------|
 | 0 | Success (including no-op re-run) |
 | 1 | User aborted or validation error |
-| 2 | Brain unreachable (clone/fetch failed) |
+| 2 | Brain store unreachable (clone/fetch failed; for non-git backends, connect failed) |
 | 3 | Filesystem conflict (existing `thoughts/` path, unwritable instruction file) |
 | 5 | Attached, not initialised (emitted by every command except `init`, `doctor`, `help`, `version`) |
 | 7 | Secret found in config being written |

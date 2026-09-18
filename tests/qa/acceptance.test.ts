@@ -104,7 +104,7 @@ describe('specs/02 init', () => {
   it('fresh repo + new brain: kind dirs, initial commit, symlink to the brain ROOT, /thoughts gitignored', async () => {
     const { repo, brain } = await attached('payments-api', 'acme-brain');
     expect(fs.readdirSync(path.join(repo, 'thoughts', 'repos', 'payments-api')).sort()).toEqual([
-      'decisions', 'index.md', 'plans', 'prs', 'research', 'specs',
+      'codegraph', 'decisions', 'index.md', 'plans', 'prs', 'research', 'specs',
     ]);
     // specs/01: the symlink target MUST be the brain root, so other repos and shared/ are reachable.
     expect(fs.realpathSync(path.join(repo, 'thoughts'))).toBe(fs.realpathSync(brain));

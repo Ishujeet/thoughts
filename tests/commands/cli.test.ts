@@ -25,11 +25,11 @@ async function cli(...args: string[]): Promise<{ code: number; stdout: string; s
 }
 
 describe('buildProgram', () => {
-  it('registers init, sync, new and scan', () => {
+  it('registers the shipped commands, the planned placeholders and help', () => {
     const names = buildProgram()
       .commands.map((c) => c.name())
       .sort();
-    expect(names).toEqual(['init', 'new', 'scan', 'sync']);
+    expect(names).toEqual(['attach-all', 'doctor', 'help', 'init', 'kit', 'new', 'scan', 'search', 'status', 'sync', 'worktree']);
   });
 
   it('handleError prints masked findings in the specs/15 form and maps exit codes', () => {

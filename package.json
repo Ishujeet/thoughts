@@ -23,7 +23,7 @@
     "linux"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.build.json && chmod +x dist/index.js",
+    "build": "tsc -p tsconfig.build.json && chmod +x dist/index.js && mkdir -p dist/brain/backends/schema && cp src/brain/backends/schema/pg.sql dist/brain/backends/schema/pg.sql && cp src/brain/backends/schema/nebula.ngql dist/brain/backends/schema/nebula.ngql",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -39,5 +39,10 @@
     "@types/node": "^22.15.0",
     "typescript": "^5.8.0",
     "vitest": "^3.2.0"
+  },
+  "optionalDependencies": {
+    "pg": "^8.16.0",
+    "tree-sitter-wasms": "0.1.13",
+    "web-tree-sitter": "0.25.10"
   }
 }

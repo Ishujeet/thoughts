@@ -1,6 +1,6 @@
 # thoughts
 
-A CLI that attaches a shared, git-backed "brain" to every repo in a multi-repo project so AI coding assistants plan, spec, research, and commit with whole-project context. Full description: [Project.md](Project.md).
+A CLI that attaches a shared "brain" to every repo in a multi-repo project — a plain git repository by default, with PostgreSQL and NebulaGraph as opt-in backends — so AI coding assistants plan, spec, research, and commit with whole-project context. Full description: [Project.md](Project.md).
 
 ## Where things are
 
@@ -13,6 +13,7 @@ A CLI that attaches a shared, git-backed "brain" to every repo in a multi-repo p
 - **TypeScript on Node.js**, ESM, strict mode. Pin the minimum Node LTS in `package.json` `engines`.
 - **Handlebars** for templates, restricted to the subset in `specs/07-templates.md`. Templates must stay readable by non-developers.
 - **Search**: grep-class and SQLite FTS5 behind one interface. SQLite binding is an optional dependency; any SQLite failure falls back to grep with a warning, never an error.
+- **Brain backends**: git (default), PostgreSQL, and NebulaGraph — chosen at init; thoughts remain OKF markdown in every backend.
 - **Platforms**: macOS and Linux only. No Windows work in v1.
 - **The CLI never calls an LLM.** Not a limitation, a rule.
 - **Distribution**: GitHub Releases + install script in v1; npm registry later.

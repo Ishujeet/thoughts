@@ -7,6 +7,8 @@ Both developers MUST follow this. Specs in `specs/` are the source of truth for 
 | Package | Owner | Owned paths (create/edit only here) |
 |---------|-------|--------------------------------------|
 | **core** | dev-core | `src/brain/**`, `src/security/**`, `tests/brain/**`, `tests/security/**` |
+| **backends** | dev-core | `src/brain/backends/**`, `tests/brain/backends/**` |
+| **codegraph** | dev-core | `src/codegraph/**`, `tests/codegraph/**` |
 | **commands** | dev-commands | `src/commands/**`, `src/templates/**`, `src/adapters/**`, `src/git.ts`, `src/cli.ts`, `src/index.ts`, `templates/**`, `kit/**`, `tests/commands/**`, `tests/templates/**`, `tests/adapters/**` |
 
 Supervisor-owned, read-only for both: `package.json`, `package-lock.json`, `tsconfig*.json`, `vitest.config.ts`, `.gitignore`, `src/types.ts`, `src/paths.ts`, `src/assets.ts`, `src/output.ts`, `tests/scaffold.test.ts`, `CONTRACT.md`, `specs/**`, `CLAUDE.md`.
@@ -23,6 +25,8 @@ src/templates/        template resolution (specs/07) + restricted Handlebars ren
 src/adapters/         claude-code adapter (specs/11): CLAUDE.md managed block, .claude/commands
 src/git.ts            execFile wrapper around git
 src/brain/            config chain, layout, OKF parse/validate, index/log generation, lint, preflight
+src/brain/backends/   brain store backends: git, psql, nebula (specs/16)
+src/codegraph/        tree-sitter code graph extraction (specs/17)
 src/security/         secret scanner (specs/15)
 src/{types,paths,assets,output}.ts   shared, supervisor-owned
 templates/*.md        built-in templates (embedded assets)
@@ -30,8 +34,8 @@ kit/                  standard kit assets: kit/instructions.md, kit/commands/tho
 ```
 
 Import rules:
-- `commands` -> `brain`, `security`, `templates`, `adapters`, `git`, shared. 
-- `brain` and `security` -> shared only. They MUST NOT import from `commands`, `templates`, `adapters`, or `git.ts`. The only git use allowed in `brain` is `git config --get user.email` for the default user id.
+- `commands` -> `brain`, `security`, `codegraph`, `templates`, `adapters`, `git`, shared. 
+- `brain` and `security` -> shared only. They MUST NOT import from `commands`, `templates`, `adapters`, or `git.ts`. The only git use allowed in `brain` is `git config --get user.email` for the default user id. `src/brain/backends/**` counts as `brain` for these rules, except that its `git` backend MAY import `git.ts` for its transport; `src/codegraph/` -> shared only.
 - Nothing imports `cli.ts` except `index.ts` and tests.
 - ESM everywhere: relative imports end in `.js` (`import { x } from './okf.js'`).
 

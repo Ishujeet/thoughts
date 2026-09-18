@@ -271,12 +271,15 @@ async function walk(root: string, dir: string, out: string[]): Promise<void> {
   for (const entry of entries) {
     if (entry.name === '.git') continue;
     const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) await walk(root, full, out);
-    else if (entry.isFile()) out.push('/' + path.relative(root, full).split(path.sep).join('/'));
+    if (entry.isDirectory()) {
+      // specs/17: a repo's generated `codegraph/` data is never scanned.
+      if (entry.name === 'codegraph' && /(^|\/)repos\/[^/]+$/.test(path.relative(root, dir).split(path.sep).join('/'))) continue;
+      await walk(root, full, out);
+    } else if (entry.isFile()) out.push('/' + path.relative(root, full).split(path.sep).join('/'));
   }
 }
 
-/** Every file under `root` except `.git/`. */
+/** Every file under `root` except `.git/` and the repos' `codegraph/` data. */
 export async function scanTree(root: string, opts: ScanOptions = {}): Promise<Finding[]> {
   const files: string[] = [];
   await walk(root, root, files);

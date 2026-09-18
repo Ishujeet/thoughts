@@ -18,9 +18,19 @@ export function normalizeBundlePath(relPath: string): string {
 }
 
 /**
+ * True for the generated codegraph data of a repo, `repos/<id>/codegraph/**`
+ * (specs/17 "Storage"): never a thought, never scanned, never indexed.
+ */
+export function isCodegraphPath(relPath: string): boolean {
+  const p = normalizeBundlePath(relPath).slice(1).split('/');
+  return p.length >= 3 && p[0] === 'repos' && p[2] === 'codegraph';
+}
+
+/**
  * Locate a bundle-relative path inside the three zones. Returns `undefined`
  * for paths outside `shared/`, `repos/`, `users/`, for zone/owner directories
- * themselves, and for the generated `index.md` / `log.md` files.
+ * themselves, for the generated `index.md` / `log.md` files, and for a repo's
+ * generated `codegraph/` data (specs/17: generated data, never hand-edited).
  */
 export function locate(relPath: string): ThoughtLocation | undefined {
   const path = normalizeBundlePath(relPath);
@@ -41,6 +51,7 @@ export function locate(relPath: string): ThoughtLocation | undefined {
     rest = segments.slice(2);
   }
   if (rest.length === 0 || (rest[rest.length - 1] as string).length === 0) return undefined;
+  if (rest[0] === 'codegraph') return undefined;
 
   const kind = rest.length >= 2 ? rest[0] : undefined;
   const m = DATE_PREFIX.exec(filename);

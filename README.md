@@ -8,7 +8,7 @@
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-6b7280.svg?style=flat-square)](specs/12-open-decisions.md)
 [![Status](https://img.shields.io/badge/status-alpha-d97706.svg?style=flat-square)](#project-status)
 
-**`thoughts` attaches a shared, git-backed brain to every repository in a multi-repo project, so that people and their AI assistants plan, spec, research, and commit with the context of the whole system instead of one repo.**
+**`thoughts` attaches a shared brain to every repository in a multi-repo project — a plain git repository by default, with opt-in PostgreSQL and NebulaGraph backends — so that people and their AI assistants plan, spec, research, and commit with the context of the whole system instead of one repo.**
 
 [Why](#why) · [How it works](#how-it-works) · [Quick start](#quick-start) · [Commands](#commands) · [The brain](#the-brain) · [Secret scanning](#secret-scanning) · [Specs](#specifications)
 
@@ -35,7 +35,7 @@ That context lives in people's heads, in chat, or in a wiki nobody updates. Serv
 
 ## How it works
 
-**1. One brain per project.** An ordinary git repository, nothing more. Markdown with YAML frontmatter, organised per the [Open Knowledge Format](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md). No server, no database, no account.
+**1. One brain per project.** An ordinary git repository by default — nothing more required. Markdown with YAML frontmatter, organised per the [Open Knowledge Format](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md). No server and no account for the default backend; PostgreSQL and NebulaGraph are opt-in alternatives, and the thoughts stay the same markdown files either way.
 
 **2. `thoughts init` in each code repo.** It symlinks the whole brain at `<repo>/thoughts`, so every repo's thinking is readable from every other repo. It installs a small kit of slash commands, and it inserts a managed block into `CLAUDE.md` (or `AGENTS.md`) that tells the assistant to read and write the brain at the right moments. Your own content in those files is never touched.
 

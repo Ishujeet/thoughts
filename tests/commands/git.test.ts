@@ -87,7 +87,7 @@ describe('git wrapper', () => {
     await git.addAll(dir);
     const second = await git.commit(dir, 'second');
     const diff = await git.diffNameStatus(dir, first, second);
-    expect(diff).toEqual(expect.arrayContaining([{ path: 'b.md', code: 'R' }, { path: 'c.md', code: 'A' }]));
+    expect(diff).toEqual(expect.arrayContaining([{ path: 'b.md', code: 'R', from: 'a.md' }, { path: 'c.md', code: 'A' }]));
     const bare = path.join(root, 'b.git');
     await git.init(bare, { bare: true });
     expect(await git.isBareRepo(bare)).toBe(true);
